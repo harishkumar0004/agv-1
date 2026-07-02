@@ -163,7 +163,7 @@ class LandmarkMap:
         dc = target["column"] - current["column"]
 
         # North
-        if dr == -1 and dc == 0:
+        if dr == 1 and dc == 0:
             return 0.0
 
         # East
@@ -171,11 +171,11 @@ class LandmarkMap:
             return 90.0
 
         # South
-        if dr == 1 and dc == 0:
+        if dr == -1 and dc == 0:
             return 180.0
 
         # West
         if dr == 0 and dc == -1:
-            return 270.0
+            return -90.0
 
         raise ValueError(f"Landmarks {current_id} and {target_id} are not neighbors.")

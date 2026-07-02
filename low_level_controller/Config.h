@@ -51,7 +51,7 @@ constexpr float TRACK_WIDTH_M = 0.324;
 
 constexpr float MAX_LINEAR_VELOCITY_MPS = 0.10f;
 constexpr float MAX_LINEAR_ACCELERATION_MPS2 = 0.30f;
-constexpr float MAX_STEP_RATE = 5000.0f;
+constexpr float MAX_STEP_RATE = 10000.0f;
 constexpr float MIN_STEP_RATE = 1.0f;
 
 //==================================================
@@ -87,6 +87,12 @@ constexpr float HEADING_KD = 0.0f;
 
 constexpr float LATERAL_KP = 0.01f;
 
+constexpr float TAG_SPACING_M = 0.50f; // tag spacing in meters.
+
+constexpr float LATERAL_CORRECTION_DISTANCE_RATIO = 0.70f; // 70percent corrrection happens in tag spacing.
+
+constexpr float MAX_LATERAL_HEADING_BIAS_DEG = 10.0f; // clamp lateral-to-heading correction.
+
 constexpr float MAX_STEERING = 0.05f;
 
 constexpr float STEERING_DIRECTION = 1.0f;
@@ -95,7 +101,7 @@ constexpr float STEERING_DIRECTION = 1.0f;
 // Timing
 //==================================================
 constexpr uint32_t CONTROL_PERIOD_US = 2500;
-constexpr uint32_t COMMAND_TIMEOUT_MS = 5000;
-constexpr uint32_t STATUS_PERIOD_MS = 100;
+constexpr uint32_t COMMAND_TIMEOUT_MS = 30000;
+constexpr uint32_t STATUS_PERIOD_MS = 250;
 
 }

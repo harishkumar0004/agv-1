@@ -33,6 +33,10 @@ def main():
     #     print("Unable to communicate with low-level controller.")
     #     return
 
+    # newly updated
+    last_sent_tag = None
+    last_sent_landmark = None
+
     started = False
 
     print("==========================================")
@@ -63,11 +67,33 @@ def main():
                 if navigation.current == navigation.target:
                     velocity = 0.0
 
-                serial.send_velocity(
-                    velocity,
-                    navigation.desired_heading,
-                    navigation.lateral_error,
-                )
+                should_send = False
+
+                if localization.tag != last_sent_tag:
+                    should_send = True
+
+                if navigation.current != last_sent_landmark:
+                    should_send = True
+
+                if should_send:
+                    print(
+                        f"SEND VEL {velocity:.3f} "
+                        f"{navigation.desired_heading:.2f} "
+                        f"{navigation.lateral_error:.4f} "
+                        f"tag={localization.tag} "
+                        f"current={navigation.current} "
+                        f"next={navigation.next}"
+                    )
+
+                    if serial.send_velocity(
+                        velocity,
+                        navigation.desired_heading,
+                        navigation.lateral_error,
+                    ):
+                        last_sent_tag = localization.tag
+                        last_sent_landmark = navigation.current
+                    else:
+                        print("VEL command was not acknowledged by ESP32.")
 
             viewer.draw(frame, detections)
             viewer.show(frame)

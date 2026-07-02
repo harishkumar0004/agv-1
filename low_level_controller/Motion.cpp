@@ -13,6 +13,16 @@ void Motion::begin() {
     headingErrorDeg = 0.0f;
     angularVelocity = 0.0f;
 
+    baseDesiredHeadingDeg = 0.0f;
+
+    initialLateralHeadingBiasDeg = 0.0f;
+    activeLateralHeadingBiasDeg = 0.0f;
+
+    activeTargetHeadingDeg = 0.0f;
+
+    correctionDurationMs = 0.0f;
+    correctionStartTimeMs = millis();
+
     lastCommandTime = millis();
     lastUpdateTime = micros();
 
@@ -33,26 +43,48 @@ void Motion::update() {
         return;
     }
 
+    float progress = 1.0f;
+
+    if (correctionDurationMs > 0.0f) {
+        const float elapsedMs =
+            static_cast<float>(millis() - correctionStartTimeMs);
+
+        progress = elapsedMs / correctionDurationMs;
+
+        if (progress > 1.0f) {
+            progress = 1.0f;
+        }
+
+        if (progress < 0.0f) {
+            progress = 0.0f;
+        }
+    }
+
+    activeLateralHeadingBiasDeg =
+        initialLateralHeadingBiasDeg * (1.0f - progress);
+
+    activeTargetHeadingDeg = normalizeAngle(
+        baseDesiredHeadingDeg + activeLateralHeadingBiasDeg
+    );
+
     headingErrorDeg = normalizeAngle(
-        command.desiredHeadingDeg - imu.getHeading());
+        activeTargetHeadingDeg - imu.getHeading()
+    );
 
     const float headingCorrection =
         Config::HEADING_KP * headingErrorDeg;
 
-    const float headingCorrectionRad = headingCorrection * DEG_TO_RAD;
-
-    const float lateralCorrection =
-        Config::LATERAL_KP * command.lateralErrorM;
+    angularVelocity =
+        headingCorrection * DEG_TO_RAD;
 
     angularVelocity =
-        headingCorrectionRad + lateralCorrection;
-
-    angularVelocity =
+        Config::STEERING_DIRECTION *
         limitAngularVelocity(angularVelocity);
 
     stepper.setMotion(
         command.velocityMps,
-        angularVelocity);
+        angularVelocity
+    );
 }
 
 void Motion::setNavigationCommand(
@@ -63,7 +95,53 @@ void Motion::setNavigationCommand(
     command.velocityMps =
         limitVelocity(command.velocityMps);
 
-    lastCommandTime = millis();
+    command.desiredHeadingDeg =
+        normalizeAngle(command.desiredHeadingDeg);
+
+    baseDesiredHeadingDeg =
+        command.desiredHeadingDeg;
+
+    float correctionDistanceM =
+        Config::TAG_SPACING_M *
+        Config::LATERAL_CORRECTION_DISTANCE_RATIO;
+
+    if (correctionDistanceM < 0.05f) {
+        correctionDistanceM = 0.05f;
+    }
+
+    initialLateralHeadingBiasDeg =
+        atan2f(command.lateralErrorM, correctionDistanceM) * RAD_TO_DEG;
+
+    if (initialLateralHeadingBiasDeg > Config::MAX_LATERAL_HEADING_BIAS_DEG) {
+        initialLateralHeadingBiasDeg = Config::MAX_LATERAL_HEADING_BIAS_DEG;
+    }
+
+    if (initialLateralHeadingBiasDeg < -Config::MAX_LATERAL_HEADING_BIAS_DEG) {
+        initialLateralHeadingBiasDeg = -Config::MAX_LATERAL_HEADING_BIAS_DEG;
+    }
+
+    activeLateralHeadingBiasDeg =
+        initialLateralHeadingBiasDeg;
+
+    activeTargetHeadingDeg = normalizeAngle(
+        baseDesiredHeadingDeg + activeLateralHeadingBiasDeg
+    );
+
+    const float velocityAbs =
+        fabsf(command.velocityMps);
+
+    if (velocityAbs < 0.01f) {
+        correctionDurationMs = 0.0f;
+    } else {
+        correctionDurationMs =
+            (correctionDistanceM / velocityAbs) * 1000.0f;
+    }
+
+    correctionStartTimeMs =
+        millis();
+
+    lastCommandTime =
+        millis();
 }
 
 void Motion::stop() {
@@ -71,6 +149,16 @@ void Motion::stop() {
 
     headingErrorDeg = 0.0f;
     angularVelocity = 0.0f;
+
+    baseDesiredHeadingDeg = 0.0f;
+
+    initialLateralHeadingBiasDeg = 0.0f;
+    activeLateralHeadingBiasDeg = 0.0f;
+
+    activeTargetHeadingDeg = 0.0f;
+
+    correctionDurationMs = 0.0f;
+    correctionStartTimeMs = millis();
 
     stepper.stop();
 }
@@ -80,9 +168,19 @@ NavigationCommand Motion::getNavigationCommand() const {
 }
 
 float Motion::getHeadingError() const {
-    Serial.println("headingErrorDeg: ");
-    Serial.println(headingErrorDeg);
     return headingErrorDeg;
+}
+
+float Motion::getActiveTargetHeading() const {
+    return activeTargetHeadingDeg;
+}
+
+float Motion::getActiveLateralBias() const {
+    return activeLateralHeadingBiasDeg;
+}
+
+float Motion::getAngularVelocity() const {
+    return angularVelocity;
 }
 
 float Motion::normalizeAngle(float angleDeg) {

@@ -215,14 +215,26 @@ void SerialProtocol::printStatus() {
     Serial.print(" GYRO=");
     Serial.print(imu.getGyroRate(), 2);
 
-    Serial.print(" TARGET=");
+    Serial.print(" DES=");
     Serial.print(command.desiredHeadingDeg, 2);
+
+    Serial.print(" ACTIVE=");
+    Serial.print(motion.getActiveTargetHeading(), 2);
+
+    Serial.print(" BIAS=");
+    Serial.print(motion.getActiveLateralBias(), 2);
 
     Serial.print(" ERR=");
     Serial.print(motion.getHeadingError(), 2);
 
+    Serial.print(" WZ=");
+    Serial.print(motion.getAngularVelocity(), 4);
+
     Serial.print(" VEL=");
-    Serial.println(command.velocityMps, 3);
+    Serial.print(command.velocityMps, 3);
+
+    Serial.print(" LAT=");
+    Serial.println(command.lateralErrorM, 4);
 }
 
 void SerialProtocol::printHelp() {
