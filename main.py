@@ -29,12 +29,6 @@ def main():
 
     camera.start()
 
-    # if not serial.ping():
-    #     print("Unable to communicate with low-level controller.")
-    #     return
-
-    # newly updated
-    last_sent_tag = None
     last_sent_landmark = None
 
     started = False
@@ -49,7 +43,6 @@ def main():
 
     try:
         while True:
-
             frame = camera.get_frame()
 
             detections = detector.detect(frame)
@@ -61,7 +54,6 @@ def main():
             navigation.update(localization)
 
             if started and navigation.valid():
-
                 velocity = navigation.velocity
 
                 if navigation.current == navigation.target:
@@ -96,6 +88,16 @@ def main():
                     else:
                         print("VEL command was not acknowledged by ESP32.")
 
+            for line in serial.read_available_lines():
+                if line.startswith("STATUS"):
+                    print("ESP32:", line)
+                elif line.startswith("FAULT"):
+                    print("ESP32 fault:", line)
+                elif line.startswith("ERR"):
+                    print("ESP32 error:", line)
+                else:
+                    print("ESP32:", line)
+
             viewer.draw(frame, detections)
             viewer.show(frame)
 
@@ -105,7 +107,6 @@ def main():
                 break
 
             if key == ord("s") and not started:
-
                 if not localization.valid():
                     print("No valid localization. Cannot start.")
                     continue
@@ -133,11 +134,11 @@ def main():
                     continue
 
                 started = True
+                last_sent_landmark = None
 
                 print("Autonomous navigation started.")
 
     finally:
-
         serial.stop()
         serial.disable()
         serial.close()

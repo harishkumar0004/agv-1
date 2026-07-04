@@ -1,6 +1,16 @@
 import geometry
 
 
+def normalize_angle(angle_deg):
+    while angle_deg > 180.0:
+        angle_deg -= 360.0
+
+    while angle_deg <= -180.0:
+        angle_deg += 360.0
+
+    return angle_deg
+
+
 class Navigation:
     def __init__(self, world):
         self.world = world
@@ -55,34 +65,46 @@ class Navigation:
         if not self.path:
             self.path = self.world.find_path(self.current, self.target)
             self.path_index = 0
+
             if not self.path:
                 return
 
-        # Robot deviated from planned path.
         elif self.current != self.path[self.path_index]:
             self.path = self.world.find_path(self.current, self.target)
             self.path_index = 0
+
             if not self.path:
                 return
 
-        # Advance along path.
         if (
             self.path_index + 1 < len(self.path)
             and self.current == self.path[self.path_index + 1]
         ):
             self.path_index += 1
 
-        # Determine next landmark.
-        self.next = self.world.get_next_landmark(self.path, self.path_index)
+        self.next = self.world.get_next_landmark(
+            self.path,
+            self.path_index,
+        )
 
         if self.next is None:
             return
 
-        # Compute the desired heading
-        self.desired_heading = self.world.get_heading(self.current, self.next)
+        map_heading = self.world.get_heading(
+            self.current,
+            self.next,
+        )
 
-        # Compute the lateral error
+        tag_heading_error = localization.heading
+
+        self.desired_heading = normalize_angle(
+            map_heading - tag_heading_error
+        )
+
         self.lateral_error = localization.lateral
 
     def valid(self):
-        return self.desired_heading is not None and self.lateral_error is not None
+        return (
+            self.desired_heading is not None
+            and self.lateral_error is not None
+        )
