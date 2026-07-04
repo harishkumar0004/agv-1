@@ -69,9 +69,6 @@ def main():
 
                 should_send = False
 
-                if localization.tag != last_sent_tag:
-                    should_send = True
-
                 if navigation.current != last_sent_landmark:
                     should_send = True
 
@@ -81,6 +78,11 @@ def main():
                         f"{navigation.desired_heading:.2f} "
                         f"{navigation.lateral_error:.4f} "
                         f"tag={localization.tag} "
+                        f"pos={localization.position} "
+                        f"raw_lat={localization.raw_lateral:.4f} "
+                        f"offset={localization.center_lateral_offset:.4f} "
+                        f"corr_lat={localization.lateral:.4f} "
+                        f"visible={localization.visible_tags} "
                         f"current={navigation.current} "
                         f"next={navigation.next}"
                     )
@@ -90,7 +92,6 @@ def main():
                         navigation.desired_heading,
                         navigation.lateral_error,
                     ):
-                        last_sent_tag = localization.tag
                         last_sent_landmark = navigation.current
                     else:
                         print("VEL command was not acknowledged by ESP32.")
