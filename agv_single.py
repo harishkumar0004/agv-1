@@ -250,6 +250,30 @@ def map_heading(current_id, next_id):
 
     return None
 
+def stop_positions_for_landmark(heading_deg):
+    heading_deg = normalize_angle(heading_deg)
+
+    if abs(normalize_angle(heading_deg - 0.0)) < 1.0:
+        return {"west", "center", "east"}
+    if abs(normalize_angle(heading_deg - 90.0)) < 1.0:
+        return {"north", "center", "south"}
+    if abs(normalize_angle(heading_deg - 180.0)) < 1.0:
+        return {"west", "center", "east"}
+    if abs(normalize_angle(heading_deg - -90.0)) < 1.0:
+        return {"north", "center", "south"}
+
+    return {"centre"}
+
+def target_arrival_allowed(pose, base_heading_deg, target_id):
+    if pose is None:
+        return False
+    
+    if pose["landmark_id"] != target_id:
+        return False
+    
+    allowed_positions = stop_positions_for_landmark(base_heading_deg)
+    return pose["position"] in allowed_positions
+
 # camera
 def start_camera():
     camera = Picamera2()
@@ -376,28 +400,72 @@ def estimate_pose_from_tags(detections):
 def compute_navigation(pose, target_id, velocity_mps):
     if pose is None:
         return None
-    
+
     current = pose["landmark_id"]
-    if current == target_id:
-        return {
-            "current" : current,
-            "next" : None,
-            "desired_heading" : 0.0,
-            "lateral_error" : 0.0,
-            "velocity" : 0.0,
-            "path": [current],
-        }
+
     path = find_path(current, target_id)
+
+    if current == target_id:
+        # We are seeing the target landmark.
+        # But do not stop on entry-row tags.
+        #
+        # For current simple 0 -> 1 test, previous landmark is START_LANDMARK.
+        # So base heading is from START_LANDMARK to target.
+        base_heading = map_heading(START_LANDMARK, target_id)
+
+        if base_heading is None:
+            base_heading = 0.0
+
+        if target_arrival_allowed(pose, base_heading, target_id):
+            return {
+                "current": current,
+                "next": None,
+                "desired_heading": 0.0,
+                "lateral_error": 0.0,
+                "velocity": 0.0,
+                "path": [current],
+                "arrival_allowed": True,
+            }
+
+        # Target detected, but only entry-row tag is visible.
+        # Keep moving forward using the original segment heading.
+        tag_heading_correction = -TAG_HEADING_GAIN * pose["heading"]
+        tag_heading_correction = clamp(tag_heading_correction,-MAX_TAG_HEADING_CORRECTION_DEG,
+            MAX_TAG_HEADING_CORRECTION_DEG,)
+
+        desired_heading = normalize_angle(base_heading + tag_heading_correction)
+
+        return {
+            "current": current,
+            "next": target_id,
+            "desired_heading": desired_heading,
+            "lateral_error": pose["lateral"],
+            "velocity": velocity_mps,
+            "path": [START_LANDMARK, target_id],
+            "arrival_allowed": False,
+        }
+
+    path = find_path(current, target_id)
+
     if len(path) < 2:
         return None
+
     nxt = path[1]
+
     base_heading = map_heading(current, nxt)
+
     if base_heading is None:
         return None
-    
+
     tag_heading_correction = -TAG_HEADING_GAIN * pose["heading"]
-    tag_heading_correction = clamp(tag_heading_correction, -MAX_TAG_HEADING_CORRECTION_DEG, MAX_TAG_HEADING_CORRECTION_DEG)
+    tag_heading_correction = clamp(
+        tag_heading_correction,
+        -MAX_TAG_HEADING_CORRECTION_DEG,
+        MAX_TAG_HEADING_CORRECTION_DEG,
+    )
+
     desired_heading = normalize_angle(base_heading + tag_heading_correction)
+
     return {
         "current": current,
         "next": nxt,
@@ -405,6 +473,7 @@ def compute_navigation(pose, target_id, velocity_mps):
         "lateral_error": pose["lateral"],
         "velocity": velocity_mps,
         "path": path,
+        "arrival_allowed": False,
     }
 
 # ESP32 Serial Communication
@@ -638,6 +707,7 @@ def main():
 
     started = False
     last_sent_landmark = None
+    last_sent_arrival_allowed = None
 
     print("==========================================")
     print("AGV Minimal Single File Controller")
@@ -660,7 +730,7 @@ def main():
                     print("ESP32:", line)
 
             if started and nav is not None:
-                should_send = nav["current"] != last_sent_landmark
+                should_send = (nav["current"] != last_sent_landmark or nav.get("arrival_allowed") != last_sent_arrival_allowed)
 
                 if should_send:
                     print(
@@ -687,6 +757,7 @@ def main():
                     )
 
                     last_sent_landmark = nav["current"]
+                    last_sent_arrival_allowed = nav.get("arrival_allowed")
 
             draw_detections(frame, detections, pose, nav)
             cv2.imshow("AGV Single File", cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
@@ -722,6 +793,8 @@ def main():
 
                 started = True
                 last_sent_landmark = None
+
+                last_sent_arrival_allowed = None
                 print("Autonomous navigation started.")
 
     finally:
