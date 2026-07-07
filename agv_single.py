@@ -39,6 +39,11 @@ MAX_ACCEPTED_HEADING_DEG = 25.0
 
 TURN_HEADING_THRESHOLD_DEG = 1.0
 
+# Start and goal node
+
+TASK_START_LANDMARK = 1
+TASK_GOAL_LANDMARK = 11
+
 
 # Map Loading
 
@@ -1011,12 +1016,11 @@ def main():
                     print("No valid localization. Cannot start.")
                     continue
 
-                try:
-                    start_node = int(input("Enter start landmark ID: ").strip())
-                    goal_node = int(input("Enter goal landmark ID: ").strip())
-                except ValueError:
-                    print("Invalid input.")
-                    continue
+                start_node = TASK_START_LANDMARK
+                goal_node = TASK_GOAL_LANDMARK
+
+                print(f"Task start landmark: {start_node}")
+                print(f"Task goal landmark: {goal_node}")
 
                 if landmark_by_id(start_node) is None:
                     print("Invalid start landmark.")
