@@ -1,22 +1,25 @@
 import math
 import time
-from collections import deque
+import json
 
 import cv2
 import serial
 from picamera2 import Picamera2
 from pupil_apriltags import Detector
 
-# Configuration
+
+# Config
+
+MAP_FILE = "./maps/testbed.json"
 
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 
-FX = 615.0 #focal length in x direction, in pixels
-FY = 615.0 #focal length in y direction, in pixels
-CX = FRAME_WIDTH / 2.0 #optical center in x direction
-CY = FRAME_HEIGHT / 2.0 #optical center in y direction
-CAMERA_PARAMS = (FX, FY, CX, CY) #camera parameters
+FX = 615.0
+FY = 615.0
+CX = FRAME_WIDTH / 2.0
+CY = FRAME_HEIGHT / 2.0
+CAMERA_PARAMS = (FX, FY, CX, CY)
 
 TAG_SIZE_M = 0.010
 APRILTAG_FAMILY = "tag36h11"
@@ -24,73 +27,31 @@ APRILTAG_FAMILY = "tag36h11"
 SERIAL_PORT = "/dev/ttyUSB0"
 SERIAL_BAUD = 115200
 
-START_LANDMARK = 0
-TARGET_LANDMARK = 1
 DRIVE_VELOCITY_MPS = 0.050
 
-#Helper tags are 15 mm from centre tag
 HELPER_SPACING_M = 0.015
 
 TAG_HEADING_GAIN = 0.40
 MAX_TAG_HEADING_CORRECTION_DEG = 2.0
 
-# Measurement safety limits
-
 MAX_ACCEPTED_LATERAL_M = 0.100
 MAX_ACCEPTED_HEADING_DEG = 25.0
 
-# Tested Map
+TURN_HEADING_THRESHOLD_DEG = 1.0
 
-MAP_DATA = {
-    "grid": {
-        "rows": 5,
-        "columns": 4,
-        "landmark_spacing_m": 0.500,
-        "helper_spacing_m": HELPER_SPACING_M,
-        "auto_neighbors": True,
-    },
-    "landmarks": [
-        {
-            "id": 0,
-            "name": "Dock",
-            "type": "dock",
-            "row": -1,
-            "column": 0,
-            "tags": {
-                "north_west": 268,
-                "north": 261,
-                "north_east": 262,
-                "west": 267,
-                "center": 0,
-                "east": 263,
-                "south_west": 266,
-                "south": 265,
-                "south_east": 264,
-            },
-        },
-        {
-            "id": 1,
-            "name": "Landmark 1",
-            "type": "normal",
-            "row": 0,
-            "column": 0,
-            "tags": {
-                "north_west": 108,
-                "north": 101,
-                "north_east": 102,
-                "west": 107,
-                "center": 1,
-                "east": 103,
-                "south_west": 106,
-                "south": 105,
-                "south_east": 104,
-            },
-        },
-    ],
-}
+
+# Map Loading
+
+def load_map(filename):
+    with open(filename, "r") as f:
+        return json.load(f)
+
+
+MAP_DATA = load_map(MAP_FILE)
 
 def clamp(value, low, high):
     return max(low, min(high, value))
+
 
 def normalize_angle(angle_deg):
     while angle_deg > 180:
@@ -99,10 +60,11 @@ def normalize_angle(angle_deg):
         angle_deg += 360
     return angle_deg
 
+
 def average_angles_deg(weighted_angles):
     if not weighted_angles:
         return None
-    
+
     x_sum = 0.0
     y_sum = 0.0
 
@@ -113,27 +75,38 @@ def average_angles_deg(weighted_angles):
 
     if abs(x_sum) < 1e-9 and abs(y_sum) < 1e-9:
         return None
-    
+
     return normalize_angle(math.degrees(math.atan2(y_sum, x_sum)))
+
 
 def tag_area(detection):
     corners = getattr(detection, "corners", None)
+
     if corners is None or len(corners) != 4:
         return 0.0
-    
+
     x0, y0 = corners[0]
     x1, y1 = corners[1]
-    x2, y2 = corners[2] 
-    x3, y3 = corners[3] 
+    x2, y2 = corners[2]
+    x3, y3 = corners[3]
 
-    return 0.5 * abs(x0*y1 + x1*y2 + x2*y3 + x3*y0 - y0*x1 - y1*x2 - y2*x3 - y3*x0)
+    return 0.5 * abs(
+        x0 * y1 + x1 * y2 + x2 * y3 + x3 * y0
+        - y0 * x1 - y1 * x2 - y2 * x3 - y3 * x0
+    )
+
+
+# Tag Helper_Offset Placing
 
 def helper_lateral_offset(position):
     if position in ("east", "north_east", "south_east"):
         return HELPER_SPACING_M
+
     if position in ("west", "north_west", "south_west"):
         return -HELPER_SPACING_M
+
     return 0.0
+
 
 TAG_PRIORITY_BY_POSITION = {
     "center": 1,
@@ -149,90 +122,139 @@ TAG_PRIORITY_BY_POSITION = {
     "south_east": 3,
 }
 
+
 def tag_priority(position):
     return TAG_PRIORITY_BY_POSITION.get(position, 99)
+
+
+# AprilTag pose estimation
 
 def compute_heading(detection):
     if detection.pose_R is None:
         return None
+
     r = detection.pose_R
-    return normalize_angle(math.degrees(math.atan2(r[1, 0], r[0, 0])))
+
+    return normalize_angle(
+        math.degrees(math.atan2(r[1, 0], r[0, 0]))
+    )
+
 
 def compute_lateral(detection):
     if detection.pose_t is None:
         return None
+
     return float(detection.pose_t[0][0])
+
 
 def compute_forward(detection):
     if detection.pose_t is None:
         return None
+
     return float(detection.pose_t[1][0])
 
-# Map and navigation helpers
+
+# A* Search
 
 def landmark_by_id(landmark_id):
     for landmark in MAP_DATA["landmarks"]:
-        if landmark["id"] == landmark_id:
+        if int(landmark["id"]) == int(landmark_id):
             return landmark
+
     return None
+
 
 def find_tag(tag_id):
     for landmark in MAP_DATA["landmarks"]:
-        for position, mapped_tag_id  in landmark["tags"].items():
+        for position, mapped_tag_id in landmark["tags"].items():
             if int(mapped_tag_id) == int(tag_id):
                 return {
                     "landmark": landmark,
-                    "id": landmark["id"],
+                    "id": int(landmark["id"]),
                     "position": position,
                 }
+
     return None
+
 
 def neighbors(landmark_id):
     current = landmark_by_id(landmark_id)
+
     if current is None:
         return []
 
     out = []
+
     for landmark in MAP_DATA["landmarks"]:
-        if landmark["id"] == landmark_id:
+        if int(landmark["id"]) == int(landmark_id):
             continue
+
         dr = abs(landmark["row"] - current["row"])
         dc = abs(landmark["column"] - current["column"])
+
         if dr + dc == 1:
-            out.append(landmark["id"])
+            out.append(int(landmark["id"]))
+
     return out
 
-# BFS Search for pathfinding between landmarks
+
+def heuristic(a, b):
+    node_a = landmark_by_id(a)
+    node_b = landmark_by_id(b)
+
+    if node_a is None or node_b is None:
+        return 999999
+
+    return abs(node_a["row"] - node_b["row"]) + abs(
+        node_a["column"] - node_b["column"]
+    )
+
+
 def find_path(start_id, goal_id):
     if landmark_by_id(start_id) is None or landmark_by_id(goal_id) is None:
         return []
-    
-    queue = deque([[start_id]])
-    visited = {start_id}
 
-    while queue:
-        path = queue.popleft()
-        current = path[-1]
+    open_list = [(0, start_id)]
+    came_from = {}
+    g_score = {start_id: 0}
+
+    while open_list:
+        open_list.sort(key=lambda item: item[0])
+        _, current = open_list.pop(0)
 
         if current == goal_id:
+            path = [current]
+
+            while current in came_from:
+                current = came_from[current]
+                path.append(current)
+
+            path.reverse()
             return path
 
         for nxt in neighbors(current):
-            if nxt not in visited:
-                visited.add(nxt)
-                queue.append(path + [nxt])
+            tentative_g = g_score[current] + 1
+
+            if nxt not in g_score or tentative_g < g_score[nxt]:
+                came_from[nxt] = current
+                g_score[nxt] = tentative_g
+                f_score = tentative_g + heuristic(nxt, goal_id)
+                open_list.append((f_score, nxt))
+
     return []
 
-def map_heading(current_id, next_id):
 
+def map_heading(current_id, next_id):
     """
-    row +1 -> 0 deg
+    row +1    -> 0 deg
     column +1 -> 90 deg
-    row -1 -> 180 deg
+    row -1    -> 180 deg
     column -1 -> -90 deg
     """
+
     current = landmark_by_id(current_id)
     target = landmark_by_id(next_id)
+
     if current is None or target is None:
         return None
 
@@ -241,42 +263,58 @@ def map_heading(current_id, next_id):
 
     if dr == 1 and dc == 0:
         return 0.0
+
     if dr == 0 and dc == 1:
         return 90.0
+
     if dr == -1 and dc == 0:
         return 180.0
+
     if dr == 0 and dc == -1:
         return -90.0
 
     return None
 
-def stop_positions_for_landmark(heading_deg):
+
+# Arrival gate
+
+def waypoint_positions_for_heading(heading_deg):
     heading_deg = normalize_angle(heading_deg)
 
+    # Moving north or south: stop/pass when middle horizontal row is visible.
     if abs(normalize_angle(heading_deg - 0.0)) < 1.0:
         return {"west", "center", "east"}
-    if abs(normalize_angle(heading_deg - 90.0)) < 1.0:
-        return {"north", "center", "south"}
+
     if abs(normalize_angle(heading_deg - 180.0)) < 1.0:
         return {"west", "center", "east"}
+
+    # Moving east or west: stop/pass when middle vertical column is visible.
+    if abs(normalize_angle(heading_deg - 90.0)) < 1.0:
+        return {"north", "center", "south"}
+
     if abs(normalize_angle(heading_deg - -90.0)) < 1.0:
         return {"north", "center", "south"}
 
-    return {"centre"}
+    return {"center"}
 
-def target_arrival_allowed(pose, base_heading_deg, target_id):
+
+def waypoint_reached_for_segment(pose, active_to, active_heading):
     if pose is None:
         return False
-    
-    if pose["landmark_id"] != target_id:
+
+    if pose["landmark_id"] != active_to:
         return False
-    
-    allowed_positions = stop_positions_for_landmark(base_heading_deg)
+
+    allowed_positions = waypoint_positions_for_heading(active_heading)
+
     return pose["position"] in allowed_positions
 
-# camera
+
+# Camera
+
 def start_camera():
     camera = Picamera2()
+
     camera.set_controls(
         {
             "AwbMode": False,
@@ -286,11 +324,14 @@ def start_camera():
             "ColourGains": (1.7, 1.7),
         }
     )
+
     config = camera.create_preview_configuration(
         main={"size": (FRAME_WIDTH, FRAME_HEIGHT), "format": "RGB888"}
     )
+
     camera.configure(config)
     camera.start()
+
     return camera
 
 
@@ -306,6 +347,7 @@ def create_detector():
 
 def detect_tags(detector, frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
+
     detections = detector.detect(
         gray,
         estimate_tag_pose=True,
@@ -321,7 +363,9 @@ def detect_tags(detector, frame):
 
     return detections
 
-# This is priority-based pose estimate function
+
+# Priority based pose estimation
+
 def estimate_pose_from_tags(detections):
     candidates = []
     unknown_tags = []
@@ -348,19 +392,21 @@ def estimate_pose_from_tags(detections):
 
         area = max(float(getattr(det, "area", 0.0)), 1.0)
 
-        candidates.append({
-            "tag": int(det.tag_id),
-            "landmark": result["landmark"],
-            "landmark_id": result["id"],
-            "position": position,
-            "priority": tag_priority(position),
-            "heading": det.heading,
-            "raw_lateral": det.lateral,
-            "offset": offset,
-            "corrected_lateral": corrected_lateral,
-            "forward": det.forward,
-            "area": area,
-        })
+        candidates.append(
+            {
+                "tag": int(det.tag_id),
+                "landmark": result["landmark"],
+                "landmark_id": result["id"],
+                "position": position,
+                "priority": tag_priority(position),
+                "heading": det.heading,
+                "raw_lateral": det.lateral,
+                "offset": offset,
+                "corrected_lateral": corrected_lateral,
+                "forward": det.forward,
+                "area": area,
+            }
+        )
 
     if unknown_tags:
         print(f"Unknown tags detected: {unknown_tags}")
@@ -368,7 +414,13 @@ def estimate_pose_from_tags(detections):
     if not candidates:
         return None
 
-    selected = min(candidates,key=lambda item: (item["priority"],-item["area"],),)
+    selected = min(
+        candidates,
+        key=lambda item: (
+            item["priority"],
+            -item["area"],
+        ),
+    )
 
     visible_same_landmark = [
         item["tag"]
@@ -396,108 +448,91 @@ def estimate_pose_from_tags(detections):
         "used_count": 1,
         "quality": selected["area"],
     }
-    
-def compute_navigation(pose, target_id, velocity_mps):
+
+
+# Navigation
+
+def compute_navigation_for_segment(
+    pose,
+    active_to,
+    active_heading,
+    goal_node,
+    velocity_mps,
+):
     if pose is None:
         return None
 
-    current = pose["landmark_id"]
+    reached_waypoint = waypoint_reached_for_segment(
+        pose,
+        active_to,
+        active_heading,
+    )
 
-    path = find_path(current, target_id)
-
-    if current == target_id:
-        # We are seeing the target landmark.
-        # But do not stop on entry-row tags.
-        #
-        # For current simple 0 -> 1 test, previous landmark is START_LANDMARK.
-        # So base heading is from START_LANDMARK to target.
-        base_heading = map_heading(START_LANDMARK, target_id)
-
-        if base_heading is None:
-            base_heading = 0.0
-
-        if target_arrival_allowed(pose, base_heading, target_id):
-            return {
-                "current": current,
-                "next": None,
-                "desired_heading": 0.0,
-                "lateral_error": 0.0,
-                "velocity": 0.0,
-                "path": [current],
-                "arrival_allowed": True,
-            }
-
-        # Target detected, but only entry-row tag is visible.
-        # Keep moving forward using the original segment heading.
-        tag_heading_correction = -TAG_HEADING_GAIN * pose["heading"]
-        tag_heading_correction = clamp(tag_heading_correction,-MAX_TAG_HEADING_CORRECTION_DEG,
-            MAX_TAG_HEADING_CORRECTION_DEG,)
-
-        desired_heading = normalize_angle(base_heading + tag_heading_correction)
-
+    if reached_waypoint and active_to == goal_node:
         return {
-            "current": current,
-            "next": target_id,
-            "desired_heading": desired_heading,
-            "lateral_error": pose["lateral"],
-            "velocity": velocity_mps,
-            "path": [START_LANDMARK, target_id],
-            "arrival_allowed": False,
+            "current": pose["landmark_id"],
+            "next": None,
+            "desired_heading": 0.0,
+            "lateral_error": 0.0,
+            "velocity": 0.0,
+            "reached_waypoint": True,
+            "final_arrival": True,
         }
 
-    path = find_path(current, target_id)
-
-    if len(path) < 2:
-        return None
-
-    nxt = path[1]
-
-    base_heading = map_heading(current, nxt)
-
-    if base_heading is None:
-        return None
-
     tag_heading_correction = -TAG_HEADING_GAIN * pose["heading"]
+
     tag_heading_correction = clamp(
         tag_heading_correction,
         -MAX_TAG_HEADING_CORRECTION_DEG,
         MAX_TAG_HEADING_CORRECTION_DEG,
     )
 
-    desired_heading = normalize_angle(base_heading + tag_heading_correction)
+    desired_heading = normalize_angle(active_heading + tag_heading_correction)
 
     return {
-        "current": current,
-        "next": nxt,
+        "current": pose["landmark_id"],
+        "next": active_to,
         "desired_heading": desired_heading,
         "lateral_error": pose["lateral"],
         "velocity": velocity_mps,
-        "path": path,
-        "arrival_allowed": False,
+        "reached_waypoint": reached_waypoint,
+        "final_arrival": False,
     }
 
-# ESP32 Serial Communication
+
+# Serial communication
 
 def open_serial(port=SERIAL_PORT, baud=SERIAL_BAUD):
     ser = serial.Serial(port, baud, timeout=0.2)
+
     time.sleep(2.0)
+
     ser.reset_input_buffer()
     ser.reset_output_buffer()
+
     return ser
+
 
 def read_line(ser):
     line = ser.readline().decode(errors="ignore").strip()
+
     if line == "":
         return None
+
     return line
+
 
 def read_available_lines(ser):
     lines = []
+
     while ser.in_waiting > 0:
         line = read_line(ser)
+
         if line is None:
             break
+
         lines.append(line)
+
     return lines
 
 
@@ -506,6 +541,7 @@ def wait_for_ack(ser, max_wait_s=1.0):
 
     while time.monotonic() < deadline:
         line = read_line(ser)
+
         if line is None:
             continue
 
@@ -524,17 +560,59 @@ def wait_for_ack(ser, max_wait_s=1.0):
 
     return False
 
+
 def send_command_wait_ack(ser, command, max_wait_s=1.0):
     ser.reset_input_buffer()
     ser.write((command + "\n").encode())
     ser.flush()
+
     return wait_for_ack(ser, max_wait_s=max_wait_s)
 
 
 def send_velocity(ser, velocity_mps, desired_heading_deg, lateral_error_m):
     command = f"VEL {velocity_mps:.3f} {desired_heading_deg:.2f} {lateral_error_m:.4f}"
+
     print("TX:", command)
+
     return send_command_wait_ack(ser, command, max_wait_s=1.0)
+
+
+def send_turn_wait_done(ser, target_heading_deg, max_wait_s=15.0):
+    command = f"TURN {target_heading_deg:.2f}"
+
+    print("TX:", command)
+
+    ser.reset_input_buffer()
+    ser.write((command + "\n").encode())
+    ser.flush()
+
+    deadline = time.monotonic() + max_wait_s
+    got_ack = False
+
+    while time.monotonic() < deadline:
+        line = read_line(ser)
+
+        if line is None:
+            continue
+
+        print("ESP32:", line)
+
+        if line == "ACK" or line.startswith("ACK"):
+            got_ack = True
+            continue
+
+        if line.startswith("TURN_DONE"):
+            return True
+
+        if line.startswith("ERR") or line.startswith("FAULT"):
+            return False
+
+    if not got_ack:
+        print("No ACK for TURN.")
+
+    print("TURN timeout.")
+
+    return False
 
 
 def calibrate_imu(ser):
@@ -556,14 +634,15 @@ def stop_robot(ser):
 def disable_motors(ser):
     return send_command_wait_ack(ser, "DIS", max_wait_s=1.0)
 
+
 # Viewer
 
 def draw_detections(frame, detections, pose=None, nav=None):
     height, width = frame.shape[:2]
+
     image_center_x = width // 2
     image_center_y = height // 2
 
-    # Draw camera center crosshair
     cv2.line(
         frame,
         (0, image_center_y),
@@ -571,6 +650,7 @@ def draw_detections(frame, detections, pose=None, nav=None):
         (128, 128, 128),
         1,
     )
+
     cv2.line(
         frame,
         (image_center_x, 0),
@@ -578,6 +658,7 @@ def draw_detections(frame, detections, pose=None, nav=None):
         (128, 128, 128),
         1,
     )
+
     cv2.circle(
         frame,
         (image_center_x, image_center_y),
@@ -587,31 +668,28 @@ def draw_detections(frame, detections, pose=None, nav=None):
     )
 
     selected_tag = None
+
     if pose is not None:
         selected_tag = pose["tag"]
 
     for det in detections:
         corners = det.corners.astype(int)
-
         tag_center = tuple(det.center.astype(int))
 
         if selected_tag is not None and int(det.tag_id) == int(selected_tag):
-            color = (0, 255, 255)   # selected tag
+            color = (0, 255, 255)
             thickness = 3
         else:
-            color = (0, 255, 0)     # normal detected tag
+            color = (0, 255, 0)
             thickness = 2
 
-        # Draw tag border
         for i in range(4):
             p1 = tuple(corners[i])
             p2 = tuple(corners[(i + 1) % 4])
             cv2.line(frame, p1, p2, color, thickness)
 
-        # Draw tag center
         cv2.circle(frame, tag_center, 5, (0, 0, 255), -1)
 
-        # Draw line from camera/image center to tag center
         cv2.line(
             frame,
             (image_center_x, image_center_y),
@@ -667,6 +745,7 @@ def draw_detections(frame, detections, pose=None, nav=None):
             f"h={pose['heading']:.2f} "
             f"visible={pose['visible_tags']}"
         )
+
         cv2.putText(
             frame,
             text,
@@ -676,6 +755,7 @@ def draw_detections(frame, detections, pose=None, nav=None):
             (255, 255, 255),
             2,
         )
+
         y += 25
 
     if nav is not None:
@@ -684,8 +764,11 @@ def draw_detections(frame, detections, pose=None, nav=None):
             f"next={nav['next']} "
             f"des={nav['desired_heading']:.2f} "
             f"lat={nav['lateral_error']:.4f} "
-            f"vel={nav['velocity']:.3f}"
+            f"vel={nav['velocity']:.3f} "
+            f"reached={nav['reached_waypoint']} "
+            f"final={nav['final_arrival']}"
         )
+
         cv2.putText(
             frame,
             text,
@@ -698,7 +781,33 @@ def draw_detections(frame, detections, pose=None, nav=None):
 
     return frame
 
-# Main loop
+
+# Turn validation
+
+def wait_for_landmark_pose(camera, detector, landmark_id, max_wait_s=5.0):
+    deadline = time.monotonic() + max_wait_s
+
+    while time.monotonic() < deadline:
+        frame = camera.capture_array()
+        detections = detect_tags(detector, frame)
+        pose = estimate_pose_from_tags(detections)
+
+        draw_detections(frame, detections, pose, None)
+
+        cv2.imshow(
+            "AGV Single File",
+            cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
+        )
+
+        cv2.waitKey(1)
+
+        if pose is not None and pose["landmark_id"] == landmark_id:
+            return pose
+
+    return None
+
+
+# main loop
 
 def main():
     camera = start_camera()
@@ -706,14 +815,26 @@ def main():
     ser = open_serial()
 
     started = False
-    last_sent_landmark = None
-    last_sent_arrival_allowed = None
+
+    path = []
+    path_index = 0
+
+    start_node = None
+    goal_node = None
+
+    active_from = None
+    active_to = None
+    active_heading = None
+
+    last_sent_segment = None
+    last_sent_final_arrival = None
+    last_sent_pose_landmark = None
+    last_sent_pose_tag = None
 
     print("==========================================")
-    print("AGV Minimal Single File Controller")
-    print(f"Start landmark: {START_LANDMARK}")
-    print(f"Target landmark: {TARGET_LANDMARK}")
-    print("Press 's' to calibrate/start. Press 'q' to quit.")
+    print("AGV A* Single File Controller")
+    print("Press 's' to calibrate/start.")
+    print("Press 'q' to quit.")
     print("==========================================")
 
     try:
@@ -721,46 +842,164 @@ def main():
             frame = camera.capture_array()
             detections = detect_tags(detector, frame)
             pose = estimate_pose_from_tags(detections)
-            nav = compute_navigation(pose, TARGET_LANDMARK, DRIVE_VELOCITY_MPS)
+
+            nav = None
+
+            if started:
+                nav = compute_navigation_for_segment(
+                    pose,
+                    active_to,
+                    active_heading,
+                    goal_node,
+                    DRIVE_VELOCITY_MPS,
+                )
 
             for line in read_available_lines(ser):
-                if line.startswith("STATUS") or line.startswith("FAULT") or line.startswith("ERR"):
-                    print("ESP32:", line)
-                else:
-                    print("ESP32:", line)
+                print("ESP32:", line)
 
             if started and nav is not None:
-                should_send = (nav["current"] != last_sent_landmark or nav.get("arrival_allowed") != last_sent_arrival_allowed)
+                current_segment = (active_from, active_to)
 
-                if should_send:
-                    print(
-                        f"SEND VEL {nav['velocity']:.3f} "
-                        f"{nav['desired_heading']:.2f} "
-                        f"{nav['lateral_error']:.4f} "
-                        f"tag={pose['tag']} "
-                        f"pos={pose['position']} "
-                        f"priority={pose['priority']} "
-                        f"raw_lat={pose['raw_lateral']:.4f} "
-                        f"offset={pose['center_lateral_offset']:.4f} "
-                        f"corr_lat={pose['lateral']:.4f} "
-                        f"visible={pose['visible_tags']} "
-                        f"used={pose['used_count']} "
-                        f"current={nav['current']} "
-                        f"next={nav['next']}"
-                    )
+                if nav["final_arrival"]:
+                    print(f"FINAL GOAL REACHED: {goal_node}")
 
                     send_velocity(
                         ser,
-                        nav["velocity"],
-                        nav["desired_heading"],
-                        nav["lateral_error"],
+                        0.0,
+                        0.0,
+                        0.0,
                     )
 
-                    last_sent_landmark = nav["current"]
-                    last_sent_arrival_allowed = nav.get("arrival_allowed")
+                    started = False
+                    nav = None
+
+                else:
+                    if nav["reached_waypoint"] and active_to != goal_node:
+                        print(f"PASSED WAYPOINT {active_to}")
+
+                        old_heading = active_heading
+
+                        path_index += 1
+
+                        active_from = path[path_index]
+                        active_to = path[path_index + 1]
+                        active_heading = map_heading(active_from, active_to)
+
+                        heading_change = normalize_angle(active_heading - old_heading)
+
+                        print(
+                            f"NEXT SEGMENT {active_from}->{active_to} "
+                            f"heading={active_heading:.1f} "
+                            f"turn={heading_change:.1f}"
+                        )
+
+                        if abs(heading_change) > TURN_HEADING_THRESHOLD_DEG:
+                            print("TURN NEEDED. Stopping before pivot turn.")
+
+                            send_velocity(
+                                ser,
+                                0.0,
+                                0.0,
+                                0.0,
+                            )
+
+                            ok = send_turn_wait_done(
+                                ser,
+                                active_heading,
+                                max_wait_s=15.0,
+                            )
+
+                            if not ok:
+                                print("Turn failed. Aborting navigation.")
+                                stop_robot(ser)
+                                started = False
+                                nav = None
+                                continue
+
+                            print("Turn complete. Waiting for valid tag after turn.")
+
+                            pose_after_turn = wait_for_landmark_pose(
+                                camera,
+                                detector,
+                                active_from,
+                                max_wait_s=5.0,
+                            )
+
+                            if pose_after_turn is None:
+                                print("No valid tag after turn. Aborting navigation.")
+                                stop_robot(ser)
+                                started = False
+                                nav = None
+                                continue
+
+                            pose = pose_after_turn
+
+                            print(
+                                f"Valid tag after turn: "
+                                f"lm={pose['landmark_id']} "
+                                f"tag={pose['tag']} "
+                                f"pos={pose['position']} "
+                                f"lat={pose['lateral']:.4f}"
+                            )
+
+                        nav = compute_navigation_for_segment(
+                            pose,
+                            active_to,
+                            active_heading,
+                            goal_node,
+                            DRIVE_VELOCITY_MPS,
+                        )
+
+                        last_sent_segment = None
+                        last_sent_final_arrival = None
+                        last_sent_pose_landmark = None
+                        last_sent_pose_tag = None
+
+                        current_segment = (active_from, active_to)
+
+                    if nav is not None:
+                        should_send = (
+                            current_segment != last_sent_segment
+                            or nav["final_arrival"] != last_sent_final_arrival
+                            or pose["landmark_id"] != last_sent_pose_landmark
+                            or pose["tag"] != last_sent_pose_tag
+                            or nav["reached_waypoint"]
+                        )
+
+                        if should_send:
+                            print(
+                                f"SEND VEL {nav['velocity']:.3f} "
+                                f"{nav['desired_heading']:.2f} "
+                                f"{nav['lateral_error']:.4f} "
+                                f"tag={pose['tag']} "
+                                f"pos={pose['position']} "
+                                f"priority={pose['priority']} "
+                                f"raw_lat={pose['raw_lateral']:.4f} "
+                                f"offset={pose['center_lateral_offset']:.4f} "
+                                f"corr_lat={pose['lateral']:.4f} "
+                                f"segment={active_from}->{active_to} "
+                                f"reached={nav['reached_waypoint']} "
+                                f"final={nav['final_arrival']}"
+                            )
+
+                            send_velocity(
+                                ser,
+                                nav["velocity"],
+                                nav["desired_heading"],
+                                nav["lateral_error"],
+                            )
+
+                            last_sent_segment = current_segment
+                            last_sent_final_arrival = nav["final_arrival"]
+                            last_sent_pose_landmark = pose["landmark_id"]
+                            last_sent_pose_tag = pose["tag"]
 
             draw_detections(frame, detections, pose, nav)
-            cv2.imshow("AGV Single File", cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+
+            cv2.imshow(
+                "AGV Single File",
+                cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
+            )
 
             key = cv2.waitKey(1) & 0xFF
 
@@ -772,9 +1011,51 @@ def main():
                     print("No valid localization. Cannot start.")
                     continue
 
-                if pose["landmark_id"] != START_LANDMARK:
-                    print(f"Robot must start at landmark {START_LANDMARK}. Current={pose['landmark_id']}")
+                try:
+                    start_node = int(input("Enter start landmark ID: ").strip())
+                    goal_node = int(input("Enter goal landmark ID: ").strip())
+                except ValueError:
+                    print("Invalid input.")
                     continue
+
+                if landmark_by_id(start_node) is None:
+                    print("Invalid start landmark.")
+                    continue
+
+                if landmark_by_id(goal_node) is None:
+                    print("Invalid goal landmark.")
+                    continue
+
+                if pose["landmark_id"] != start_node:
+                    print(
+                        f"Robot is not at entered start node. "
+                        f"Detected={pose['landmark_id']} "
+                        f"entered={start_node}"
+                    )
+                    continue
+
+                path = find_path(start_node, goal_node)
+
+                if len(path) < 2:
+                    print(f"No path from {start_node} to {goal_node}")
+                    continue
+
+                path_index = 0
+
+                active_from = path[path_index]
+                active_to = path[path_index + 1]
+                active_heading = map_heading(active_from, active_to)
+
+                if active_heading is None:
+                    print("Could not calculate first segment heading.")
+                    continue
+
+                print(f"A* path: {' -> '.join(map(str, path))}")
+
+                print(
+                    f"ACTIVE SEGMENT {active_from}->{active_to} "
+                    f"heading={active_heading:.1f}"
+                )
 
                 print("Calibrating IMU...")
                 if not calibrate_imu(ser):
@@ -791,10 +1072,54 @@ def main():
                     print("Failed to enable motors.")
                     continue
 
-                started = True
-                last_sent_landmark = None
+                # After ZERO, ESP32 heading is 0.
+                # If first segment heading is not 0, pivot before first drive.
+                if abs(normalize_angle(active_heading - 0.0)) > TURN_HEADING_THRESHOLD_DEG:
+                    print(
+                        f"Initial turn needed to heading "
+                        f"{active_heading:.1f}"
+                    )
 
-                last_sent_arrival_allowed = None
+                    ok = send_turn_wait_done(
+                        ser,
+                        active_heading,
+                        max_wait_s=15.0,
+                    )
+
+                    if not ok:
+                        print("Initial turn failed.")
+                        stop_robot(ser)
+                        continue
+
+                    pose_after_turn = wait_for_landmark_pose(
+                        camera,
+                        detector,
+                        active_from,
+                        max_wait_s=5.0,
+                    )
+
+                    if pose_after_turn is None:
+                        print("No valid tag after initial turn.")
+                        stop_robot(ser)
+                        continue
+
+                    pose = pose_after_turn
+
+                    print(
+                        f"Valid tag after initial turn: "
+                        f"lm={pose['landmark_id']} "
+                        f"tag={pose['tag']} "
+                        f"pos={pose['position']} "
+                        f"lat={pose['lateral']:.4f}"
+                    )
+
+                started = True
+
+                last_sent_segment = None
+                last_sent_final_arrival = None
+                last_sent_pose_landmark = None
+                last_sent_pose_tag = None
+
                 print("Autonomous navigation started.")
 
     finally:

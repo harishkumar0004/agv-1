@@ -15,48 +15,379 @@
         {
             "id": 0,
             "name": "Dock",
-
             "type": "dock",
-
             "row": -1,
             "column": 0,
-
             "tags": {
                 "north_west": 268,
                 "north":      261,
                 "north_east": 262,
-
                 "west":       267,
-                "center":       0,
+                "center":     0,
                 "east":       263,
-
                 "south_west": 266,
                 "south":      265,
                 "south_east": 264
             }
         },
-
         {
             "id": 1,
             "name": "Landmark 1",
-
             "type": "normal",
-
             "row": 0,
             "column": 0,
-
             "tags": {
                 "north_west": 108,
                 "north":      101,
                 "north_east": 102,
-
                 "west":       107,
-                "center":       1,
+                "center":     1,
                 "east":       103,
-
                 "south_west": 106,
                 "south":      105,
                 "south_east": 104
+            }
+        },
+        {
+            "id": 2,
+            "name": "Landmark 2",
+            "type": "normal",
+            "row": 0,
+            "column": 1,
+            "tags": {
+                "north_west": 116,
+                "north":      109,
+                "north_east": 110,
+                "west":       115,
+                "center":     2,
+                "east":       111,
+                "south_west": 114,
+                "south":      113,
+                "south_east": 112
+            }
+        },
+        {
+            "id": 3,
+            "name": "Landmark 3",
+            "type": "normal",
+            "row": 0,
+            "column": 2,
+            "tags": {
+                "north_west": 124,
+                "north":      117,
+                "north_east": 118,
+                "west":       123,
+                "center":     3,
+                "east":       119,
+                "south_west": 122,
+                "south":      121,
+                "south_east": 120
+            }
+        },
+        {
+            "id": 4,
+            "name": "Landmark 4",
+            "type": "normal",
+            "row": 0,
+            "column": 3,
+            "tags": {
+                "north_west": 132,
+                "north":      125,
+                "north_east": 126,
+                "west":       131,
+                "center":     4,
+                "east":       127,
+                "south_west": 130,
+                "south":      129,
+                "south_east": 128
+            }
+        },
+        {
+            "id": 5,
+            "name": "Landmark 5",
+            "type": "normal",
+            "row": 1,
+            "column": 0,
+            "tags": {
+                "north_west": 140,
+                "north":      133,
+                "north_east": 134,
+                "west":       139,
+                "center":     5,
+                "east":       135,
+                "south_west": 138,
+                "south":      137,
+                "south_east": 136
+            }
+        },
+        {
+            "id": 6,
+            "name": "Landmark 6",
+            "type": "normal",
+            "row": 1,
+            "column": 1,
+            "tags": {
+                "north_west": 148,
+                "north":      141,
+                "north_east": 142,
+                "west":       147,
+                "center":     6,
+                "east":       143,
+                "south_west": 146,
+                "south":      145,
+                "south_east": 144
+            }
+        },
+        {
+            "id": 7,
+            "name": "Landmark 7",
+            "type": "normal",
+            "row": 1,
+            "column": 2,
+            "tags": {
+                "north_west": 156,
+                "north":      149,
+                "north_east": 150,
+                "west":       155,
+                "center":     7,
+                "east":       151,
+                "south_west": 154,
+                "south":      153,
+                "south_east": 152
+            }
+        },
+        {
+            "id": 8,
+            "name": "Landmark 8",
+            "type": "normal",
+            "row": 1,
+            "column": 3,
+            "tags": {
+                "north_west": 164,
+                "north":      157,
+                "north_east": 158,
+                "west":       163,
+                "center":     8,
+                "east":       159,
+                "south_west": 162,
+                "south":      161,
+                "south_east": 160
+            }
+        },
+        {
+            "id": 9,
+            "name": "Landmark 9",
+            "type": "normal",
+            "row": 2,
+            "column": 0,
+            "tags": {
+                "north_west": 172,
+                "north":      165,
+                "north_east": 166,
+                "west":       171,
+                "center":     9,
+                "east":       167,
+                "south_west": 170,
+                "south":      169,
+                "south_east": 168
+            }
+        },
+        {
+            "id": 10,
+            "name": "Landmark 10",
+            "type": "normal",
+            "row": 2,
+            "column": 1,
+            "tags": {
+                "north_west": 180,
+                "north":      173,
+                "north_east": 174,
+                "west":       179,
+                "center":     10,
+                "east":       175,
+                "south_west": 178,
+                "south":      177,
+                "south_east": 176
+            }
+        },
+        {
+            "id": 11,
+            "name": "Landmark 11",
+            "type": "normal",
+            "row": 2,
+            "column": 2,
+            "tags": {
+                "north_west": 188,
+                "north":      181,
+                "north_east": 182,
+                "west":       187,
+                "center":     11,
+                "east":       183,
+                "south_west": 186,
+                "south":      185,
+                "south_east": 184
+            }
+        },
+        {
+            "id": 12,
+            "name": "Landmark 12",
+            "type": "normal",
+            "row": 2,
+            "column": 3,
+            "tags": {
+                "north_west": 196,
+                "north":      189,
+                "north_east": 190,
+                "west":       195,
+                "center":     12,
+                "east":       191,
+                "south_west": 194,
+                "south":      193,
+                "south_east": 192
+            }
+        },
+        {
+            "id": 13,
+            "name": "Landmark 13",
+            "type": "normal",
+            "row": 3,
+            "column": 0,
+            "tags": {
+                "north_west": 204,
+                "north":      197,
+                "north_east": 198,
+                "west":       203,
+                "center":     13,
+                "east":       199,
+                "south_west": 202,
+                "south":      201,
+                "south_east": 200
+            }
+        },
+        {
+            "id": 14,
+            "name": "Landmark 14",
+            "type": "normal",
+            "row": 3,
+            "column": 1,
+            "tags": {
+                "north_west": 212,
+                "north":      205,
+                "north_east": 206,
+                "west":       211,
+                "center":     14,
+                "east":       207,
+                "south_west": 210,
+                "south":      209,
+                "south_east": 208
+            }
+        },
+        {
+            "id": 15,
+            "name": "Landmark 15",
+            "type": "normal",
+            "row": 3,
+            "column": 2,
+            "tags": {
+                "north_west": 220,
+                "north":      213,
+                "north_east": 214,
+                "west":       219,
+                "center":     15,
+                "east":       215,
+                "south_west": 218,
+                "south":      217,
+                "south_east": 216
+            }
+        },
+        {
+            "id": 16,
+            "name": "Landmark 16",
+            "type": "normal",
+            "row": 3,
+            "column": 3,
+            "tags": {
+                "north_west": 228,
+                "north":      221,
+                "north_east": 222,
+                "west":       227,
+                "center":     16,
+                "east":       223,
+                "south_west": 226,
+                "south":      225,
+                "south_east": 224
+            }
+        },
+        {
+            "id": 17,
+            "name": "Landmark 17",
+            "type": "normal",
+            "row": 4,
+            "column": 0,
+            "tags": {
+                "north_west": 236,
+                "north":      229,
+                "north_east": 230,
+                "west":       235,
+                "center":     17,
+                "east":       231,
+                "south_west": 234,
+                "south":      233,
+                "south_east": 232
+            }
+        },
+        {
+            "id": 18,
+            "name": "Landmark 18",
+            "type": "normal",
+            "row": 4,
+            "column": 1,
+            "tags": {
+                "north_west": 244,
+                "north":      237,
+                "north_east": 238,
+                "west":       243,
+                "center":     18,
+                "east":       239,
+                "south_west": 242,
+                "south":      241,
+                "south_east": 240
+            }
+        },
+        {
+            "id": 19,
+            "name": "Landmark 19",
+            "type": "normal",
+            "row": 4,
+            "column": 2,
+            "tags": {
+                "north_west": 252,
+                "north":      245,
+                "north_east": 246,
+                "west":       251,
+                "center":     19,
+                "east":       247,
+                "south_west": 250,
+                "south":      249,
+                "south_east": 248
+            }
+        },
+        {
+            "id": 20,
+            "name": "Landmark 20",
+            "type": "normal",
+            "row": 4,
+            "column": 3,
+            "tags": {
+                "north_west": 260,
+                "north":      253,
+                "north_east": 254,
+                "west":       259,
+                "center":     20,
+                "east":       255,
+                "south_west": 258,
+                "south":      257,
+                "south_east": 256
             }
         }
     ]
