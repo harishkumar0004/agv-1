@@ -8,7 +8,9 @@ from picamera2 import Picamera2
 from pupil_apriltags import Detector
 
 
-# Config
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
 
 MAP_FILE = "./maps/testbed.json"
 
@@ -27,7 +29,12 @@ APRILTAG_FAMILY = "tag36h11"
 SERIAL_PORT = "/dev/ttyUSB0"
 SERIAL_BAUD = 115200
 
+# Set task here. No terminal input needed.
+TASK_START_LANDMARK = 1
+TASK_GOAL_LANDMARK = 11
+
 DRIVE_VELOCITY_MPS = 0.050
+ARRIVAL_VELOCITY_MPS = 0.025
 
 HELPER_SPACING_M = 0.015
 
@@ -35,17 +42,16 @@ TAG_HEADING_GAIN = 0.40
 MAX_TAG_HEADING_CORRECTION_DEG = 2.0
 
 MAX_ACCEPTED_LATERAL_M = 0.100
+
+# Now this is used relative to active path heading, not absolute tag heading.
 MAX_ACCEPTED_HEADING_DEG = 25.0
 
 TURN_HEADING_THRESHOLD_DEG = 1.0
 
-# Start and goal node
 
-TASK_START_LANDMARK = 1
-TASK_GOAL_LANDMARK = 11
-
-
-# Map Loading
+# ============================================================================
+# MAP LOADING
+# ============================================================================
 
 def load_map(filename):
     with open(filename, "r") as f:
@@ -53,6 +59,11 @@ def load_map(filename):
 
 
 MAP_DATA = load_map(MAP_FILE)
+
+
+# ============================================================================
+# BASIC HELPERS
+# ============================================================================
 
 def clamp(value, low, high):
     return max(low, min(high, value))
@@ -64,24 +75,6 @@ def normalize_angle(angle_deg):
     while angle_deg <= -180:
         angle_deg += 360
     return angle_deg
-
-
-def average_angles_deg(weighted_angles):
-    if not weighted_angles:
-        return None
-
-    x_sum = 0.0
-    y_sum = 0.0
-
-    for angle_deg, weight in weighted_angles:
-        angle_rad = math.radians(angle_deg)
-        x_sum += math.cos(angle_rad) * weight
-        y_sum += math.sin(angle_rad) * weight
-
-    if abs(x_sum) < 1e-9 and abs(y_sum) < 1e-9:
-        return None
-
-    return normalize_angle(math.degrees(math.atan2(y_sum, x_sum)))
 
 
 def tag_area(detection):
@@ -101,7 +94,9 @@ def tag_area(detection):
     )
 
 
-# Tag Helper_Offset Placing
+# ============================================================================
+# TAG PRIORITY AND HELPER OFFSET
+# ============================================================================
 
 def helper_lateral_offset(position):
     if position in ("east", "north_east", "south_east"):
@@ -132,7 +127,9 @@ def tag_priority(position):
     return TAG_PRIORITY_BY_POSITION.get(position, 99)
 
 
-# AprilTag pose estimation
+# ============================================================================
+# APRILTAG POSE HELPERS
+# ============================================================================
 
 def compute_heading(detection):
     if detection.pose_R is None:
@@ -159,7 +156,9 @@ def compute_forward(detection):
     return float(detection.pose_t[1][0])
 
 
-# A* Search
+# ============================================================================
+# MAP AND A* PATH
+# ============================================================================
 
 def landmark_by_id(landmark_id):
     for landmark in MAP_DATA["landmarks"]:
@@ -281,19 +280,21 @@ def map_heading(current_id, next_id):
     return None
 
 
-# Arrival gate
+# ============================================================================
+# WAYPOINT / ARRIVAL GATE
+# ============================================================================
 
 def waypoint_positions_for_heading(heading_deg):
     heading_deg = normalize_angle(heading_deg)
 
-    # Moving north or south: stop/pass when middle horizontal row is visible.
+    # Moving north/south: center horizontal row is valid.
     if abs(normalize_angle(heading_deg - 0.0)) < 1.0:
         return {"west", "center", "east"}
 
     if abs(normalize_angle(heading_deg - 180.0)) < 1.0:
         return {"west", "center", "east"}
 
-    # Moving east or west: stop/pass when middle vertical column is visible.
+    # Moving east/west: center vertical column is valid.
     if abs(normalize_angle(heading_deg - 90.0)) < 1.0:
         return {"north", "center", "south"}
 
@@ -315,7 +316,9 @@ def waypoint_reached_for_segment(pose, active_to, active_heading):
     return pose["position"] in allowed_positions
 
 
-# Camera
+# ============================================================================
+# CAMERA AND DETECTOR
+# ============================================================================
 
 def start_camera():
     camera = Picamera2()
@@ -369,7 +372,9 @@ def detect_tags(detector, frame):
     return detections
 
 
-# Priority based pose estimation
+# ============================================================================
+# PRIORITY-BASED POSE ESTIMATION
+# ============================================================================
 
 def estimate_pose_from_tags(detections):
     candidates = []
@@ -392,8 +397,9 @@ def estimate_pose_from_tags(detections):
         if abs(corrected_lateral) > MAX_ACCEPTED_LATERAL_M:
             continue
 
-        if abs(det.heading) > MAX_ACCEPTED_HEADING_DEG:
-            continue
+        # IMPORTANT:
+        # Do not reject by absolute heading here.
+        # In multi-direction navigation, valid tag heading can be 0, 90, 180, or -90.
 
         area = max(float(getattr(det, "area", 0.0)), 1.0)
 
@@ -455,7 +461,9 @@ def estimate_pose_from_tags(detections):
     }
 
 
-# Navigation
+# ============================================================================
+# NAVIGATION
+# ============================================================================
 
 def compute_navigation_for_segment(
     pose,
@@ -473,6 +481,27 @@ def compute_navigation_for_segment(
         active_heading,
     )
 
+    # ------------------------------------------------------------------------
+    # ARRIVAL MODE
+    # When entering target landmark but not yet at center row/column:
+    # do not use lateral correction, do not use tag heading correction.
+    # Just move slowly straight until center row/column is reached.
+    # ------------------------------------------------------------------------
+    if pose["landmark_id"] == active_to and not reached_waypoint:
+        return {
+            "current": pose["landmark_id"],
+            "next": active_to,
+            "desired_heading": active_heading,
+            "lateral_error": 0.0,
+            "velocity": ARRIVAL_VELOCITY_MPS,
+            "reached_waypoint": False,
+            "final_arrival": False,
+            "arrival_mode": True,
+        }
+
+    # ------------------------------------------------------------------------
+    # FINAL GOAL STOP
+    # ------------------------------------------------------------------------
     if reached_waypoint and active_to == goal_node:
         return {
             "current": pose["landmark_id"],
@@ -482,9 +511,20 @@ def compute_navigation_for_segment(
             "velocity": 0.0,
             "reached_waypoint": True,
             "final_arrival": True,
+            "arrival_mode": False,
         }
 
-    tag_heading_correction = -TAG_HEADING_GAIN * pose["heading"]
+    # ------------------------------------------------------------------------
+    # NORMAL TRAVEL MODE
+    # Heading error is relative to the active segment heading.
+    # This fixes the 90-degree helper tag rejection problem.
+    # ------------------------------------------------------------------------
+    tag_heading_error = normalize_angle(pose["heading"] - active_heading)
+
+    if abs(tag_heading_error) > MAX_ACCEPTED_HEADING_DEG:
+        tag_heading_error = 0.0
+
+    tag_heading_correction = -TAG_HEADING_GAIN * tag_heading_error
 
     tag_heading_correction = clamp(
         tag_heading_correction,
@@ -502,10 +542,13 @@ def compute_navigation_for_segment(
         "velocity": velocity_mps,
         "reached_waypoint": reached_waypoint,
         "final_arrival": False,
+        "arrival_mode": False,
     }
 
 
-# Serial communication
+# ============================================================================
+# SERIAL COMMUNICATION
+# ============================================================================
 
 def open_serial(port=SERIAL_PORT, baud=SERIAL_BAUD):
     ser = serial.Serial(port, baud, timeout=0.2)
@@ -640,7 +683,9 @@ def disable_motors(ser):
     return send_command_wait_ack(ser, "DIS", max_wait_s=1.0)
 
 
-# Viewer
+# ============================================================================
+# VIEWER
+# ============================================================================
 
 def draw_detections(frame, detections, pose=None, nav=None):
     height, width = frame.shape[:2]
@@ -770,6 +815,7 @@ def draw_detections(frame, detections, pose=None, nav=None):
             f"des={nav['desired_heading']:.2f} "
             f"lat={nav['lateral_error']:.4f} "
             f"vel={nav['velocity']:.3f} "
+            f"arr={nav.get('arrival_mode')} "
             f"reached={nav['reached_waypoint']} "
             f"final={nav['final_arrival']}"
         )
@@ -787,7 +833,9 @@ def draw_detections(frame, detections, pose=None, nav=None):
     return frame
 
 
-# Turn validation
+# ============================================================================
+# TURN VALIDATION
+# ============================================================================
 
 def wait_for_landmark_pose(camera, detector, landmark_id, max_wait_s=5.0):
     deadline = time.monotonic() + max_wait_s
@@ -812,7 +860,9 @@ def wait_for_landmark_pose(camera, detector, landmark_id, max_wait_s=5.0):
     return None
 
 
-# main loop
+# ============================================================================
+# MAIN LOOP
+# ============================================================================
 
 def main():
     camera = start_camera()
@@ -835,6 +885,7 @@ def main():
     last_sent_final_arrival = None
     last_sent_pose_landmark = None
     last_sent_pose_tag = None
+    last_sent_arrival_mode = None
 
     print("==========================================")
     print("AGV A* Single File Controller")
@@ -921,7 +972,7 @@ def main():
                                 nav = None
                                 continue
 
-                            print("Turn complete. Waiting for valid tag after turn.")
+                            print("Turn complete. Checking for valid helper/center tag.")
 
                             pose_after_turn = wait_for_landmark_pose(
                                 camera,
@@ -931,21 +982,21 @@ def main():
                             )
 
                             if pose_after_turn is None:
-                                print("No valid tag after turn. Aborting navigation.")
-                                stop_robot(ser)
-                                started = False
-                                nav = None
-                                continue
+                                print(
+                                    "No valid tag after turn. "
+                                    "Continuing with last known pose."
+                                )
+                            else:
+                                pose = pose_after_turn
 
-                            pose = pose_after_turn
-
-                            print(
-                                f"Valid tag after turn: "
-                                f"lm={pose['landmark_id']} "
-                                f"tag={pose['tag']} "
-                                f"pos={pose['position']} "
-                                f"lat={pose['lateral']:.4f}"
-                            )
+                                print(
+                                    f"Valid tag after turn: "
+                                    f"lm={pose['landmark_id']} "
+                                    f"tag={pose['tag']} "
+                                    f"pos={pose['position']} "
+                                    f"lat={pose['lateral']:.4f} "
+                                    f"h={pose['heading']:.2f}"
+                                )
 
                         nav = compute_navigation_for_segment(
                             pose,
@@ -959,6 +1010,7 @@ def main():
                         last_sent_final_arrival = None
                         last_sent_pose_landmark = None
                         last_sent_pose_tag = None
+                        last_sent_arrival_mode = None
 
                         current_segment = (active_from, active_to)
 
@@ -968,6 +1020,7 @@ def main():
                             or nav["final_arrival"] != last_sent_final_arrival
                             or pose["landmark_id"] != last_sent_pose_landmark
                             or pose["tag"] != last_sent_pose_tag
+                            or nav.get("arrival_mode") != last_sent_arrival_mode
                             or nav["reached_waypoint"]
                         )
 
@@ -982,7 +1035,9 @@ def main():
                                 f"raw_lat={pose['raw_lateral']:.4f} "
                                 f"offset={pose['center_lateral_offset']:.4f} "
                                 f"corr_lat={pose['lateral']:.4f} "
+                                f"tag_h={pose['heading']:.2f} "
                                 f"segment={active_from}->{active_to} "
+                                f"arrival_mode={nav.get('arrival_mode')} "
                                 f"reached={nav['reached_waypoint']} "
                                 f"final={nav['final_arrival']}"
                             )
@@ -998,6 +1053,7 @@ def main():
                             last_sent_final_arrival = nav["final_arrival"]
                             last_sent_pose_landmark = pose["landmark_id"]
                             last_sent_pose_tag = pose["tag"]
+                            last_sent_arrival_mode = nav.get("arrival_mode")
 
             draw_detections(frame, detections, pose, nav)
 
@@ -1032,9 +1088,9 @@ def main():
 
                 if pose["landmark_id"] != start_node:
                     print(
-                        f"Robot is not at entered start node. "
+                        f"Robot is not at task start node. "
                         f"Detected={pose['landmark_id']} "
-                        f"entered={start_node}"
+                        f"expected={start_node}"
                     )
                     continue
 
@@ -1095,6 +1151,8 @@ def main():
                         stop_robot(ser)
                         continue
 
+                    print("Initial turn complete. Checking helper/center tag.")
+
                     pose_after_turn = wait_for_landmark_pose(
                         camera,
                         detector,
@@ -1103,19 +1161,21 @@ def main():
                     )
 
                     if pose_after_turn is None:
-                        print("No valid tag after initial turn.")
-                        stop_robot(ser)
-                        continue
+                        print(
+                            "No valid tag after initial turn. "
+                            "Continuing with last known pose."
+                        )
+                    else:
+                        pose = pose_after_turn
 
-                    pose = pose_after_turn
-
-                    print(
-                        f"Valid tag after initial turn: "
-                        f"lm={pose['landmark_id']} "
-                        f"tag={pose['tag']} "
-                        f"pos={pose['position']} "
-                        f"lat={pose['lateral']:.4f}"
-                    )
+                        print(
+                            f"Valid tag after initial turn: "
+                            f"lm={pose['landmark_id']} "
+                            f"tag={pose['tag']} "
+                            f"pos={pose['position']} "
+                            f"lat={pose['lateral']:.4f} "
+                            f"h={pose['heading']:.2f}"
+                        )
 
                 started = True
 
@@ -1123,6 +1183,7 @@ def main():
                 last_sent_final_arrival = None
                 last_sent_pose_landmark = None
                 last_sent_pose_tag = None
+                last_sent_arrival_mode = None
 
                 print("Autonomous navigation started.")
 
