@@ -924,6 +924,35 @@ def camera_worker(camera, detector):
             latest_frame_id += 1
 
         time.sleep(0.002)
+
+def helper_forward_offset_for_heading(position, heading_deg):
+    heading_deg = normalize_angle(heading_deg)
+
+    if abs(normalize_angle(heading_deg - 0.0)) < 1.0:
+        if position in ("south", "south_west", "south_east"):
+            return HELPER_SPACING_M
+        if position in ("north", "north_west", "north_east"):
+            return -HELPER_SPACING_M
+
+    if abs(normalize_angle(heading_deg - 180.0)) < 1.0:
+        if position in ("north", "north_west", "north_east"):
+            return HELPER_SPACING_M
+        if position in ("south", "south_west", "south_east"):
+            return -HELPER_SPACING_M
+
+    if abs(normalize_angle(heading_deg - 90.0)) < 1.0:
+        if position in ("west", "north_west", "south_west"):
+            return HELPER_SPACING_M
+        if position in ("east", "north_east", "south_east"):
+            return -HELPER_SPACING_M
+
+    if abs(normalize_angle(heading_deg - -90.0)) < 1.0:
+        if position in ("east", "north_east", "south_east"):
+            return HELPER_SPACING_M
+        if position in ("west", "north_west", "south_west"):
+            return -HELPER_SPACING_M
+
+    return 0.0
 # Main
 
 def main():
@@ -1037,13 +1066,16 @@ def main():
                             active_heading,
                         )
 
+                    raw_y_text = "None" if raw_y_error is None else f"{raw_y_error:.4f}"
+                    corr_y_text = "None" if y_error is None else f"{y_error:.4f}"
+
                     print(
                         f"TAG1_APPROACH "
                         f"tag={pose['tag']} "
                         f"pos={pose['position']} "
                         f"x={x_error:.4f} "
-                        f"raw_y={raw_y_error:.4f} "
-                        f"corr_y={y_error:.4f}"
+                        f"raw_y={raw_y_text} "
+                        f"corr_y={corr_y_text}"
                     )
 
                     reached_y_centre = False
@@ -1072,7 +1104,7 @@ def main():
                     send_approach(
                         ser,
                         ARRIVAL_VELOCITY_MPS,
-                        active_heading,
+                        pose["heading"],
                         x_error,
                         y_error,
                     )
