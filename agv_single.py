@@ -61,9 +61,7 @@ def load_map(filename):
 MAP_DATA = load_map(MAP_FILE)
 
 
-# ============================================================================
-# BASIC HELPERS
-# ============================================================================
+# Helper function
 
 def clamp(value, low, high):
     return max(low, min(high, value))
@@ -94,9 +92,7 @@ def tag_area(detection):
     )
 
 
-# ============================================================================
-# TAG PRIORITY AND HELPER OFFSET
-# ============================================================================
+# Tag priority and helper offset
 
 def helper_lateral_offset(position):
     if position in ("east", "north_east", "south_east"):
@@ -107,7 +103,16 @@ def helper_lateral_offset(position):
 
     return 0.0
 
+def compute_desired_heading_from_tag(pose, active_heading):
+    tag_heading_error = normalize_angle(pose["heading"] - active_heading)
 
+    if abs(tag_heading_error) > MAX_ACCEPTED_HEADING_DEG:
+        tag_heading_error =0.0
+
+    tag_heading_correction = -TAG_HEADING_GAIN * tag_heading_error
+    tag_heading_correction = clamp(tag_heading_correction, -MAX_TAG_HEADING_CORRECTION_DEG, MAX_TAG_HEADING_CORRECTION_DEG)
+
+    return normalize_angle(active_heading + tag_heading_correction)
 TAG_PRIORITY_BY_POSITION = {
     "center": 1,
 
@@ -942,8 +947,7 @@ def main():
                 active_heading = DOCK_HEADING_DEG
 
                 if pose is None:
-                    print("No pose during dock to tag1. Stopping.")
-                    send_velocity(ser, 0.0, 0.0, 0.0)
+                    print("No_TAG_GAP 0->1, sending nothing.")
                     continue
 
                 # stop only when tag1 centre row is reached
@@ -971,16 +975,21 @@ def main():
                 # dont not take latest frame tag0 rule1
 
                 if pose["landmark_id"] == DOCK_NODE:
-                    print(f"LEAVING_DOCK_IGNORE_TAG0 "
-                          f"tag={pose['tag']} "
-                          f"pos={pose['position']}")
-                    
-                    send_velocity(ser, DRIVE_VELOCITY_MPS, active_heading, 0.0)
+                    print(
+                        f"LEAVING_DOCK_IGNORE_TAG0 "
+                        f"tag={pose['tag']} "
+                        f"pos={pose['position']} "
+                        f"sending nothing"
+                    )
                     continue
 
                 # keep other landmarks rather than tag 0 
-                print("DOCK_CRUISE 0 -> 1")
-                send_velocity(ser, DRIVE_VELOCITY_MPS, active_heading, 0.0)
+                print(
+                    f"UNEXPECTED_LANDMARK_DURING_DOCK "
+                    f"lm={pose['landmark_id']} "
+                    f"tag={pose['tag']} "
+                    f"sending nothing"
+                )
                 continue
 
             if mode == MODE_WAIT_TASK:
@@ -1196,8 +1205,8 @@ def main():
                     )
                     continue
 
-    # Save only the first valid dock frame.
-    # Later tag 0 helper frames will not update correction.
+                # Save only the first valid dock frame.
+                # Later tag 0 helper frames will not update correction.
                 if not dock_reference_saved:
                     dock_reference_pose = pose
                     dock_reference_saved = True
@@ -1229,7 +1238,22 @@ def main():
                     continue
 
                 print("Moving from dock tag 0 to tag 1.")
-
+                
+                dock_desired_heading = compute_desired_heading_from_tag(
+                    dock_reference_pose, DOCK_HEADING_DEG,
+                )
+                print(
+                    f"DOCK_START_COMMAND "
+                    f"desired_heading={dock_desired_heading:.2f} "
+                    f"x_lateral={dock_reference_pose['lateral']:.4f} "
+                    f"tag_heading={dock_reference_pose['heading']:.2f}"
+                )
+                send_velocity(
+                    ser,
+                    DRIVE_VELOCITY_MPS,
+                    dock_desired_heading,
+                    dock_reference_pose["lateral"],
+                )
                 mode = MODE_DOCK_TO_TAG1
                 started = False
 
