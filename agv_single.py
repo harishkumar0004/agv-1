@@ -1082,6 +1082,10 @@ def main():
                 # Target tag 1 uses continuous latest frame.
                 # Send APP with x_lateral and y_lateral.
                 # ------------------------------------------------------------
+
+                if pose is None:
+                    continue
+
                 if pose["landmark_id"] == FIRST_NODE:
                     x_error = pose["lateral"]
 
@@ -1313,6 +1317,8 @@ def main():
                     path_index,
                     goal_node,
                 )
+                if pose is None:
+                    continue
 
                 if leaving_ignore_landmark is not None:
                     if pose["landmark_id"] == leaving_ignore_landmark:
