@@ -1333,9 +1333,7 @@ def main():
 
                 print("Moving from dock tag 0 to tag 1.")
                 
-                dock_desired_heading = compute_desired_heading_from_tag(
-                    dock_reference_pose, DOCK_HEADING_DEG,
-                )
+                dock_desired_heading = dock_reference_pose["heading"]
                 print(
                     f"DOCK_START_COMMAND "
                     f"desired_heading={dock_desired_heading:.2f} "
