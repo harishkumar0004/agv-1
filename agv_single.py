@@ -1038,8 +1038,11 @@ def main():
                     reached_y_centre = False
 
                     if y_error is not None:
-                        if last_tag1_forward is None:
+                        if last_tag1_forward is not None:
                             if last_tag1_forward > 0.0 and y_error <= 0.0:
+                                reached_y_centre = True
+                        else:
+                            if y_error <= 0.0:
                                 reached_y_centre = True
 
                         last_tag1_forward = y_error
