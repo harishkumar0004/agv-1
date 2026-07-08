@@ -915,6 +915,11 @@ def main():
     last_sent_pose_tag = None
     last_sent_arrival_mode = None
 
+    def show_frame(frame, detections, pose= None, nav=None):
+        draw_detections(frame, detections, pose, nav)
+        cv2.imshow("AGV Single File", cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+        return cv2.waitKey(1) & 0xFF
+
     print("==========================================")
     print("AGV A* Single File Controller")
     print("Press 's' to calibrate/start.")
@@ -946,11 +951,30 @@ def main():
             if mode == MODE_DOCK_TO_TAG1:
                 active_heading = DOCK_HEADING_DEG
 
+                # ------------------------------------------------------------
+                # No tag visible between tag 0 and tag 1 is normal.
+                # According to your rule: send nothing.
+                # But still update camera window before continue.
+                # ------------------------------------------------------------
                 if pose is None:
                     print("No_TAG_GAP 0->1, sending nothing.")
+
+                    draw_detections(frame, detections, pose, nav)
+                    cv2.imshow(
+                        "AGV Single File",
+                        cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
+                    )
+
+                    key = cv2.waitKey(1) & 0xFF
+
+                    if key == ord("q"):
+                        break
+
                     continue
 
-                # stop only when tag1 centre row is reached
+                # ------------------------------------------------------------
+                # Stop only when tag 1 centre row is reached.
+                # ------------------------------------------------------------
                 if tag1_centre_reached(pose):
                     send_velocity(ser, 0.0, 0.0, 0.0)
 
@@ -959,21 +983,60 @@ def main():
 
                     mode = MODE_WAIT_TASK
                     started = False
+
+                    draw_detections(frame, detections, pose, nav)
+                    cv2.imshow(
+                        "AGV Single File",
+                        cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
+                    )
+
+                    key = cv2.waitKey(1) & 0xFF
+
+                    if key == ord("q"):
+                        break
+
                     continue
-                # rule 2 target tag uses continuous latest frame.
+
+                # ------------------------------------------------------------
+                # Rule 2:
+                # Target tag 1 uses continuous latest frame.
+                # Send APP with x_lateral and y_lateral.
+                # ------------------------------------------------------------
                 if pose["landmark_id"] == FIRST_NODE:
-                    print(f"TAG1_APPROACH "
-                          f"tag={pose['tag']} "
-                          f"pos={pose['position']} "
-                          f"x={pose['lateral']:.4f} "
-                          f"y={pose['forward']:.4f}")
-                    send_approach(ser, ARRIVAL_VELOCITY_MPS, active_heading, 
-                                  pose["lateral"], pose["forward"],)
-                    
+                    print(
+                        f"TAG1_APPROACH "
+                        f"tag={pose['tag']} "
+                        f"pos={pose['position']} "
+                        f"x={pose['lateral']:.4f} "
+                        f"y={pose['forward']:.4f}"
+                    )
+
+                    send_approach(
+                        ser,
+                        ARRIVAL_VELOCITY_MPS,
+                        active_heading,
+                        pose["lateral"],
+                        pose["forward"],
+                    )
+
+                    draw_detections(frame, detections, pose, nav)
+                    cv2.imshow(
+                        "AGV Single File",
+                        cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
+                    )
+
+                    key = cv2.waitKey(1) & 0xFF
+
+                    if key == ord("q"):
+                        break
+
                     continue
 
-                # dont not take latest frame tag0 rule1
-
+                # ------------------------------------------------------------
+                # Rule 1:
+                # Later tag 0 frames are ignored.
+                # Send nothing, but still update video.
+                # ------------------------------------------------------------
                 if pose["landmark_id"] == DOCK_NODE:
                     print(
                         f"LEAVING_DOCK_IGNORE_TAG0 "
@@ -981,15 +1044,42 @@ def main():
                         f"pos={pose['position']} "
                         f"sending nothing"
                     )
+
+                    draw_detections(frame, detections, pose, nav)
+                    cv2.imshow(
+                        "AGV Single File",
+                        cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
+                    )
+
+                    key = cv2.waitKey(1) & 0xFF
+
+                    if key == ord("q"):
+                        break
+
                     continue
 
-                # keep other landmarks rather than tag 0 
+                # ------------------------------------------------------------
+                # Any other unexpected landmark during dock movement.
+                # According to your rule: send nothing.
+                # ------------------------------------------------------------
                 print(
                     f"UNEXPECTED_LANDMARK_DURING_DOCK "
                     f"lm={pose['landmark_id']} "
                     f"tag={pose['tag']} "
                     f"sending nothing"
                 )
+
+                draw_detections(frame, detections, pose, nav)
+                cv2.imshow(
+                    "AGV Single File",
+                    cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
+                )
+
+                key = cv2.waitKey(1) & 0xFF
+
+                if key == ord("q"):
+                    break
+
                 continue
 
             if mode == MODE_WAIT_TASK:
