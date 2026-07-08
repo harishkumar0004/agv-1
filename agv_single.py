@@ -1027,14 +1027,25 @@ def main():
                 # ------------------------------------------------------------
                 if pose["landmark_id"] == FIRST_NODE:
                     x_error = pose["lateral"]
-                    y_error = pose["forward"]
+
+                    raw_y_error = pose["forward"]
+                    y_error = raw_y_error
+
+                    if y_error is not None:
+                        y_error = y_error + helper_forward_offset_for_heading(
+                            pose["position"],
+                            active_heading,
+                        )
+
                     print(
                         f"TAG1_APPROACH "
                         f"tag={pose['tag']} "
                         f"pos={pose['position']} "
-                        f"x={pose['lateral']:.4f} "
-                        f"y={pose['forward']:.4f}"
+                        f"x={x_error:.4f} "
+                        f"raw_y={raw_y_error:.4f} "
+                        f"corr_y={y_error:.4f}"
                     )
+
                     reached_y_centre = False
 
                     if y_error is not None:
@@ -1046,11 +1057,11 @@ def main():
                                 reached_y_centre = True
 
                         last_tag1_forward = y_error
-                    
+
                     if reached_y_centre:
                         send_velocity(ser, 0.0, 0.0, 0.0)
 
-                        print("Tag1 y-center crossed.")
+                        print("Tag1 corrected y-center crossed.")
                         print("Tag1 reached.")
                         print("Enter start and goal node.")
 
@@ -1058,14 +1069,14 @@ def main():
                         started = False
                         continue
 
-                    
                     send_approach(
                         ser,
                         ARRIVAL_VELOCITY_MPS,
                         active_heading,
-                        pose["lateral"],
-                        pose["forward"],
+                        x_error,
+                        y_error,
                     )
+
                     continue
 
                 # ------------------------------------------------------------
