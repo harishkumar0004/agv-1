@@ -1078,15 +1078,6 @@ def main():
                 active_heading = DOCK_HEADING_DEG
 
                 # ------------------------------------------------------------
-                # No tag visible between tag 0 and tag 1 is normal.
-                # According to your rule: send nothing.
-                # But still update camera window before continue.
-                # ------------------------------------------------------------
-                if pose is None:
-                    print("No_TAG_GAP 0->1, sending nothing.")
-                    continue
-
-                # ------------------------------------------------------------
                 # Rule 2:
                 # Target tag 1 uses continuous latest frame.
                 # Send APP with x_lateral and y_lateral.
@@ -1290,7 +1281,7 @@ def main():
                 send_velocity(
                     ser,
                     DRIVE_VELOCITY_MPS,
-                    pose["heading"],
+                    active_heading,
                     pose["lateral"],
                 )
 
@@ -1322,13 +1313,6 @@ def main():
                     path_index,
                     goal_node,
                 )
-
-                if pose is None:
-                    print(
-                        f"NO_TAG_GAP path {active_from}->{active_to}, "
-                        f"type={current_type}, sending nothing"
-                    )
-                    continue
 
                 if leaving_ignore_landmark is not None:
                     if pose["landmark_id"] == leaving_ignore_landmark:
@@ -1409,7 +1393,7 @@ def main():
                     send_velocity(
                         ser,
                         DRIVE_VELOCITY_MPS,
-                        pose["heading"],
+                        active_heading,
                         pose["lateral"],
                     )
 
@@ -1472,7 +1456,7 @@ def main():
                         send_approach(
                             ser,
                             ARRIVAL_VELOCITY_MPS,
-                            pose["heading"],
+                            active_heading,
                             x_error,
                             y_error,
                         )
@@ -1561,7 +1545,7 @@ def main():
                     send_velocity(
                         ser,
                         DRIVE_VELOCITY_MPS,
-                        pose_after_turn["heading"],
+                        next_heading,
                         pose_after_turn["lateral"],
                     )
 
