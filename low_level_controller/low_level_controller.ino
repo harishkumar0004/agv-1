@@ -75,7 +75,7 @@ constexpr uint32_t COMMAND_TIMEOUT_MS = 30000;
 constexpr uint32_t STATUS_PERIOD_MS = 250;
 
 // Turning
-constexpr float TURN_KP = 1.2f;
+constexpr float TURN_KP = 0.5f;
 constexpr float TURN_MAX_WZ = 0.45f;
 constexpr float TURN_MIN_WZ = 0.12f;
 constexpr float TURN_TOLERANCE_DEG = 1.0f;
@@ -580,13 +580,12 @@ void beginMotion() {
 }
 
 float computeApproachVelocity(float requestedVelocityMps) {
-    const float yAbs = fabsf(commandYLateralErrorM);
+    const float y = commandYLateralErrorM;
+    constexpr float Y_NEAR_M = 0.010f;
+    constexpr float Y_FAR_M = 0.080f;
+    constexpr float MIN_APPROACH_VELOCITY_MPS = 0.018f;
 
-    constexpr float Y_NEAR_M = 0.020f;
-    constexpr float Y_FAR_M = 0.100f;
-    constexpr float MIN_APPROACH_VELOCITY_MPS = 0.010f;
-
-    float ratio = (yAbs - Y_NEAR_M) / (Y_FAR_M - Y_NEAR_M);
+    float ratio = (y - Y_NEAR_M) / (Y_FAR_M - Y_NEAR_M);
     ratio = clampFloat(ratio, 0.0f, 1.0f);
 
     float velocity =
