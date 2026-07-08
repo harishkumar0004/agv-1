@@ -1005,6 +1005,7 @@ def main():
     camera = start_camera()
     detector = create_detector()
     ser = open_serial()
+    
     camera_thread = threading.Thread(
         target=camera_worker,
         args=(camera, detector),
@@ -1034,6 +1035,7 @@ def main():
     active_from = None
     active_to = None
     active_heading = None
+    current_robot_heading = DOCK_HEADING_DEG
 
     last_sent_segment = None
     last_sent_final_arrival = None
@@ -1066,19 +1068,6 @@ def main():
                 continue
 
             last_processed_frame_id = frame_id
-
-
-
-            nav = None
-
-            if started:
-                nav = compute_navigation_for_segment(
-                    pose,
-                    active_to,
-                    active_heading,
-                    goal_node,
-                    DRIVE_VELOCITY_MPS,
-                )
 
             for line in read_available_lines(ser):
                 print("ESP32:", line)
@@ -1148,6 +1137,7 @@ def main():
                         handled_passthrough_nodes = set()
                         last_arrival_forward = None
                         leaving_ignore_landmark = None
+                        current_robot_heading = DOCK_HEADING_DEG
 
                         mode = MODE_WAIT_TASK
                         started = False
@@ -1196,7 +1186,7 @@ def main():
                 )
 
                 continue
-
+            
             if mode == MODE_WAIT_TASK:
 
                 try:
@@ -1236,15 +1226,64 @@ def main():
                     f"READY FOR PATH: {active_from}->{active_to} "
                     f"heading={active_heading:.1f}"
                 )
+
+                with latest_lock:
+                    pose = latest_pose
+
                 if pose is None or pose["landmark_id"] != start_node:
                     print("No valid start pose at node 1. Cannot leave.")
                     continue
+
+                first_heading_change = normalize_angle(active_heading - current_robot_heading)
+
+                if abs(first_heading_change) > TURN_HEADING_THRESHOLD_DEG:
+                    print(
+                        f"START_TURN_NEEDED "
+                        f"current_heading={current_robot_heading:.1f} "
+                        f"required_heading={active_heading:.1f} "
+                        f"turn={first_heading_change:.1f}"
+                    )
+
+                    ok = send_turn_wait_done(
+                        ser,
+                        active_heading,
+                        max_wait_s=15.0,
+                    )
+
+                    if not ok:
+                        print("Start turn failed. Aborting path.")
+                        stop_robot(ser)
+                        mode = MODE_WAIT_TASK
+                        started = False
+                        continue
+
+                    current_robot_heading = active_heading
+
+                    print("Start turn complete. Waiting for current start tag pose.")
+
+                    pose_after_turn = wait_for_landmark_pose(
+                        camera,
+                        detector,
+                        start_node,
+                        max_wait_s=5.0,
+                    )
+
+                    if pose_after_turn is None:
+                        print("No valid start tag pose after turn. Cannot leave.")
+                        mode = MODE_WAIT_TASK
+                        started = False
+                        continue
+
+                    pose = pose_after_turn
+                else:
+                    current_robot_heading = active_heading
 
                 print(
                     f"PATH_START_DEPARTURE "
                     f"from={active_from} "
                     f"to={active_to} "
-                    f"heading={pose['heading']:.2f} "
+                    f"current_heading={current_robot_heading:.1f} "
+                    f"tag_heading={pose['heading']:.2f} "
                     f"x={pose['lateral']:.4f}"
                 )
 
@@ -1356,9 +1395,16 @@ def main():
 
                     path_index += 1
 
+                    if path_index >= len(path) - 1:
+                        print("Path ended after pass-through.")
+                        mode = MODE_WAIT_TASK
+                        continue
+
+
                     active_from = path[path_index]
                     active_to = path[path_index + 1]
                     active_heading = map_heading(active_from, active_to)
+                    current_robot_heading = active_heading
 
                     send_velocity(
                         ser,
@@ -1470,6 +1516,7 @@ def main():
                         started = False
                         last_arrival_forward = None
                         continue
+                    current_robot_heading = next_heading
 
                     print("Turn complete. Waiting for first valid post-turn frame.")
 
