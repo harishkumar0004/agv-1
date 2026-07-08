@@ -8,9 +8,7 @@ from picamera2 import Picamera2
 from pupil_apriltags import Detector
 
 
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
+#Config Files
 
 MAP_FILE = "./maps/testbed.json"
 
@@ -28,7 +26,7 @@ APRILTAG_FAMILY = "tag36h11"
 
 SERIAL_PORT = "/dev/ttyUSB0"
 SERIAL_BAUD = 115200
-
+ # Docking variables
 DOCK_NODE = 0
 FIRST_NODE = 1
 
@@ -37,18 +35,24 @@ ARRIVAL_VELOCITY_MPS = 0.025
 
 HELPER_SPACING_M = 0.015
 
+TAG_HEADING_GAIN = 0.40
+MAX_TAG_HEADING_CORRECTION_DEG = 2.0
+
 MAX_ACCEPTED_LATERAL_M = 0.100
+
+# Now this is used relative to active path heading, not absolute tag heading.
+MAX_ACCEPTED_HEADING_DEG = 25.0
+
+TURN_HEADING_THRESHOLD_DEG = 1.0
 
 MODE_DOCK_WAIT = "DOCK_WAIT"
 MODE_DOCK_TO_TAG1 = "DOCK_TO_TAG1"
 MODE_WAIT_TASK = "WAIT_TASK"
-MODE_DONE = "DONE"
+MODE_RUN_PATH = "RUN_PATH"
 
+DOCK_HEADING_DEG = 0.0
 
-# ============================================================================
-# MAP LOADING
-# ============================================================================
-
+# Map loading
 def load_map(filename):
     with open(filename, "r") as f:
         return json.load(f)
@@ -277,19 +281,49 @@ def map_heading(current_id, next_id):
 
 
 # ============================================================================
-# DOCK TO TAG 1 HELPERS
+# WAYPOINT / ARRIVAL GATE
 # ============================================================================
 
-def tag1_center_reached(pose):
+def waypoint_positions_for_heading(heading_deg):
+    heading_deg = normalize_angle(heading_deg)
+
+    # Moving north/south: center horizontal row is valid.
+    if abs(normalize_angle(heading_deg - 0.0)) < 1.0:
+        return {"west", "center", "east"}
+
+    if abs(normalize_angle(heading_deg - 180.0)) < 1.0:
+        return {"west", "center", "east"}
+
+    # Moving east/west: center vertical column is valid.
+    if abs(normalize_angle(heading_deg - 90.0)) < 1.0:
+        return {"north", "center", "south"}
+
+    if abs(normalize_angle(heading_deg - -90.0)) < 1.0:
+        return {"north", "center", "south"}
+
+    return {"center"}
+
+# Check tag1 centre reached
+
+def tag1_centre_reached(pose):
+    if pose is None:
+        return False
+    
+    if pose ["landmark_id"] != FIRST_NODE:
+        return False
+    
+    return pose["position"] in {"west", "center", "east"}
+
+def waypoint_reached_for_segment(pose, active_to, active_heading):
     if pose is None:
         return False
 
-    if pose["landmark_id"] != FIRST_NODE:
+    if pose["landmark_id"] != active_to:
         return False
 
-    # Dock 0 -> tag 1 heading is 0 deg.
-    # For 0 deg movement, center row is west / center / east.
-    return pose["position"] in {"west", "center", "east"}
+    allowed_positions = waypoint_positions_for_heading(active_heading)
+
+    return pose["position"] in allowed_positions
 
 
 # ============================================================================
@@ -373,6 +407,10 @@ def estimate_pose_from_tags(detections):
         if abs(corrected_lateral) > MAX_ACCEPTED_LATERAL_M:
             continue
 
+        # IMPORTANT:
+        # Do not reject by absolute heading here.
+        # In multi-direction navigation, valid tag heading can be 0, 90, 180, or -90.
+
         area = max(float(getattr(det, "area", 0.0)), 1.0)
 
         candidates.append(
@@ -430,6 +468,91 @@ def estimate_pose_from_tags(detections):
         "visible_tags": visible_same_landmark,
         "used_count": 1,
         "quality": selected["area"],
+    }
+
+
+# ============================================================================
+# NAVIGATION
+# ============================================================================
+
+def compute_navigation_for_segment(
+    pose,
+    active_to,
+    active_heading,
+    goal_node,
+    velocity_mps,
+):
+    if pose is None:
+        return None
+
+    reached_waypoint = waypoint_reached_for_segment(
+        pose,
+        active_to,
+        active_heading,
+    )
+
+    # ------------------------------------------------------------------------
+    # ARRIVAL MODE
+    # When entering target landmark but not yet at center row/column:
+    # do not use lateral correction, do not use tag heading correction.
+    # Just move slowly straight until center row/column is reached.
+    # ------------------------------------------------------------------------
+    if pose["landmark_id"] == active_to and not reached_waypoint:
+        return {
+            "current": pose["landmark_id"],
+            "next": active_to,
+            "desired_heading": active_heading,
+            "lateral_error": 0.0,
+            "velocity": ARRIVAL_VELOCITY_MPS,
+            "reached_waypoint": False,
+            "final_arrival": False,
+            "arrival_mode": True,
+        }
+
+    # ------------------------------------------------------------------------
+    # FINAL GOAL STOP
+    # ------------------------------------------------------------------------
+    if reached_waypoint and active_to == goal_node:
+        return {
+            "current": pose["landmark_id"],
+            "next": None,
+            "desired_heading": 0.0,
+            "lateral_error": 0.0,
+            "velocity": 0.0,
+            "reached_waypoint": True,
+            "final_arrival": True,
+            "arrival_mode": False,
+        }
+
+    # ------------------------------------------------------------------------
+    # NORMAL TRAVEL MODE
+    # Heading error is relative to the active segment heading.
+    # This fixes the 90-degree helper tag rejection problem.
+    # ------------------------------------------------------------------------
+    tag_heading_error = normalize_angle(pose["heading"] - active_heading)
+
+    if abs(tag_heading_error) > MAX_ACCEPTED_HEADING_DEG:
+        tag_heading_error = 0.0
+
+    tag_heading_correction = -TAG_HEADING_GAIN * tag_heading_error
+
+    tag_heading_correction = clamp(
+        tag_heading_correction,
+        -MAX_TAG_HEADING_CORRECTION_DEG,
+        MAX_TAG_HEADING_CORRECTION_DEG,
+    )
+
+    desired_heading = normalize_angle(active_heading + tag_heading_correction)
+
+    return {
+        "current": pose["landmark_id"],
+        "next": active_to,
+        "desired_heading": desired_heading,
+        "lateral_error": pose["lateral"],
+        "velocity": velocity_mps,
+        "reached_waypoint": reached_waypoint,
+        "final_arrival": False,
+        "arrival_mode": False,
     }
 
 
@@ -511,18 +634,53 @@ def send_velocity(ser, velocity_mps, desired_heading_deg, lateral_error_m):
 
     return send_command_wait_ack(ser, command, max_wait_s=1.0)
 
+# send approach for lateral x and y correction when reaching tag1, or goal node
 
 def send_approach(ser, velocity_mps, desired_heading_deg, x_lateral_m, y_lateral_m):
-    command = (
-        f"APP {velocity_mps:.3f} "
-        f"{desired_heading_deg:.2f} "
-        f"{x_lateral_m:.4f} "
-        f"{y_lateral_m:.4f}"
-    )
+    command = (f"APP {velocity_mps:.3f}"
+              f" {desired_heading_deg:.2f}"
+              f" {x_lateral_m:.4f}"
+              f" {y_lateral_m:.4f}")
+    print("TX:", command)
+    return send_command_wait_ack(ser, command, max_wait_s=1.0)
+
+
+def send_turn_wait_done(ser, target_heading_deg, max_wait_s=15.0):
+    command = f"TURN {target_heading_deg:.2f}"
 
     print("TX:", command)
 
-    return send_command_wait_ack(ser, command, max_wait_s=1.0)
+    ser.reset_input_buffer()
+    ser.write((command + "\n").encode())
+    ser.flush()
+
+    deadline = time.monotonic() + max_wait_s
+    got_ack = False
+
+    while time.monotonic() < deadline:
+        line = read_line(ser)
+
+        if line is None:
+            continue
+
+        print("ESP32:", line)
+
+        if line == "ACK" or line.startswith("ACK"):
+            got_ack = True
+            continue
+
+        if line.startswith("TURN_DONE"):
+            return True
+
+        if line.startswith("ERR") or line.startswith("FAULT"):
+            return False
+
+    if not got_ack:
+        print("No ACK for TURN.")
+
+    print("TURN timeout.")
+
+    return False
 
 
 def calibrate_imu(ser):
@@ -549,7 +707,7 @@ def disable_motors(ser):
 # VIEWER
 # ============================================================================
 
-def draw_detections(frame, detections, pose=None, mode=None):
+def draw_detections(frame, detections, pose=None, nav=None):
     height, width = frame.shape[:2]
 
     image_center_x = width // 2
@@ -602,6 +760,14 @@ def draw_detections(frame, detections, pose=None, mode=None):
 
         cv2.circle(frame, tag_center, 5, (0, 0, 255), -1)
 
+        cv2.line(
+            frame,
+            (image_center_x, image_center_y),
+            tag_center,
+            color,
+            1,
+        )
+
         x = int(corners[0][0])
         y = int(corners[0][1])
 
@@ -639,26 +805,13 @@ def draw_detections(frame, detections, pose=None, mode=None):
 
     y = 25
 
-    cv2.putText(
-        frame,
-        f"MODE {mode}",
-        (10, y),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.60,
-        (255, 255, 255),
-        2,
-    )
-
-    y += 25
-
     if pose is not None:
         text = (
             f"POSE lm={pose['landmark_id']} "
             f"tag={pose['tag']} "
             f"pos={pose['position']} "
             f"pri={pose['priority']} "
-            f"x={pose['lateral']:.4f} "
-            f"y={pose['forward']:.4f} "
+            f"lat={pose['lateral']:.4f} "
             f"h={pose['heading']:.2f} "
             f"visible={pose['visible_tags']}"
         )
@@ -668,7 +821,31 @@ def draw_detections(frame, detections, pose=None, mode=None):
             text,
             (10, y),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.50,
+            0.55,
+            (255, 255, 255),
+            2,
+        )
+
+        y += 25
+
+    if nav is not None:
+        text = (
+            f"NAV cur={nav['current']} "
+            f"next={nav['next']} "
+            f"des={nav['desired_heading']:.2f} "
+            f"lat={nav['lateral_error']:.4f} "
+            f"vel={nav['velocity']:.3f} "
+            f"arr={nav.get('arrival_mode')} "
+            f"reached={nav['reached_waypoint']} "
+            f"final={nav['final_arrival']}"
+        )
+
+        cv2.putText(
+            frame,
+            text,
+            (10, y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
             (255, 255, 255),
             2,
         )
@@ -677,90 +854,135 @@ def draw_detections(frame, detections, pose=None, mode=None):
 
 
 # ============================================================================
-# MAIN LOOP
+# TURN VALIDATION
 # ============================================================================
+
+def wait_for_landmark_pose(camera, detector, landmark_id, max_wait_s=5.0):
+    deadline = time.monotonic() + max_wait_s
+
+    while time.monotonic() < deadline:
+        frame = camera.capture_array()
+        detections = detect_tags(detector, frame)
+        pose = estimate_pose_from_tags(detections)
+
+        draw_detections(frame, detections, pose, None)
+
+        cv2.imshow(
+            "AGV Single File",
+            cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
+        )
+
+        cv2.waitKey(1)
+
+        if pose is not None and pose["landmark_id"] == landmark_id:
+            return pose
+
+    return None
+
+
+# Main
 
 def main():
     camera = start_camera()
     detector = create_detector()
     ser = open_serial()
 
+    started = False
+
+    path = []
+    path_index = 0
+
     mode = MODE_DOCK_WAIT
 
+    dock_reference_pose = None
+    dock_reference_saved = False
+
+    start_node = None
+    goal_node = None
+
+    active_from = None
+    active_to = None
+    active_heading = None
+
+    last_sent_segment = None
+    last_sent_final_arrival = None
+    last_sent_pose_landmark = None
+    last_sent_pose_tag = None
+    last_sent_arrival_mode = None
+
     print("==========================================")
-    print("AGV Dock-to-Tag1 Controller")
-    print("Press 's' to start from dock tag 0.")
+    print("AGV A* Single File Controller")
+    print("Press 's' to calibrate/start.")
     print("Press 'q' to quit.")
     print("==========================================")
 
     try:
         while True:
-            # ---------------------------------------------------------------
-            # Every loop captures the latest camera frame.
-            # Correction is always based on the latest selected pose.
-            # ---------------------------------------------------------------
             frame = camera.capture_array()
             detections = detect_tags(detector, frame)
             pose = estimate_pose_from_tags(detections)
 
+            nav = None
+
+            if started:
+                nav = compute_navigation_for_segment(
+                    pose,
+                    active_to,
+                    active_heading,
+                    goal_node,
+                    DRIVE_VELOCITY_MPS,
+                )
+
             for line in read_available_lines(ser):
                 print("ESP32:", line)
 
-            # ---------------------------------------------------------------
-            # MODE: Move from dock tag 0 to tag 1
-            # ---------------------------------------------------------------
+            # Dock tag0 to tag 1 logic rule
+
             if mode == MODE_DOCK_TO_TAG1:
-                active_heading = 0.0
+                active_heading = DOCK_HEADING_DEG
 
                 if pose is None:
-                    print("No pose during dock-to-tag1. Stopping.")
+                    print("No pose during dock to tag1. Stopping.")
                     send_velocity(ser, 0.0, 0.0, 0.0)
                     continue
 
-                if tag1_center_reached(pose):
+                # stop only when tag1 centre row is reached
+                if tag1_centre_reached(pose):
                     send_velocity(ser, 0.0, 0.0, 0.0)
 
-                    print("TAG 1 REACHED")
+                    print("Tag1 reached.")
                     print("Enter start and goal node.")
 
                     mode = MODE_WAIT_TASK
+                    started = False
+                    continue
+                # rule 2 target tag uses continuous latest frame.
+                if pose["landmark_id"] == FIRST_NODE:
+                    print(f"TAG1_APPROACH "
+                          f"tag={pose['tag']} "
+                          f"pos={pose['position']} "
+                          f"x={pose['lateral']:.4f} "
+                          f"y={pose['forward']:.4f}")
+                    send_approach(ser, ARRIVAL_VELOCITY_MPS, active_heading, 
+                                  pose["lateral"], pose["forward"],)
+                    
                     continue
 
-                if pose["landmark_id"] == FIRST_NODE:
-                    # Latest frame sees tag 1 helper, but not center row yet.
-                    # Send APP with x and y correction.
-                    print(
-                        f"TAG1_APPROACH "
-                        f"tag={pose['tag']} "
-                        f"pos={pose['position']} "
-                        f"x={pose['lateral']:.4f} "
-                        f"y={pose['forward']:.4f}"
-                    )
+                # dont not take latest frame tag0 rule1
 
-                    send_approach(
-                        ser,
-                        ARRIVAL_VELOCITY_MPS,
-                        active_heading,
-                        pose["lateral"],
-                        pose["forward"],
-                    )
+                if pose["landmark_id"] == DOCK_NODE:
+                    print(f"LEAVING_DOCK_IGNORE_TAG0 "
+                          f"tag={pose['tag']} "
+                          f"pos={pose['position']}")
+                    
+                    send_velocity(ser, DRIVE_VELOCITY_MPS, active_heading, 0.0)
+                    continue
 
-                else:
-                    # Tag 1 not visible yet. Usually the camera still sees dock tag 0.
-                    print("DOCK_CRUISE 0 -> 1")
-
-                    send_velocity(
-                        ser,
-                        DRIVE_VELOCITY_MPS,
-                        active_heading,
-                        0.0,
-                    )
-
+                # keep other landmarks rather than tag 0 
+                print("DOCK_CRUISE 0 -> 1")
+                send_velocity(ser, DRIVE_VELOCITY_MPS, active_heading, 0.0)
                 continue
 
-            # ---------------------------------------------------------------
-            # MODE: After tag 1 is reached, get start and goal from terminal
-            # ---------------------------------------------------------------
             if mode == MODE_WAIT_TASK:
                 send_velocity(ser, 0.0, 0.0, 0.0)
 
@@ -768,14 +990,20 @@ def main():
                     start_node = int(input("Enter start node: "))
                     goal_node = int(input("Enter goal node: "))
                 except ValueError:
-                    print("Invalid input. Enter numbers only.")
+                    print("Invalid input.Enter numbers only.")
                     continue
-
-                print(f"Start node: {start_node}")
-                print(f"Goal node: {goal_node}")
-
+                print(f"Start Node: {start_node}")
+                print(f"Goal Node: {goal_node}")
                 if start_node != FIRST_NODE:
                     print("Robot is physically at tag 1, so start node should be 1.")
+                    continue
+
+                if landmark_by_id(start_node) is None:
+                    print("Invalid start node.")
+                    continue
+
+                if landmark_by_id(goal_node) is None:
+                    print("Invalid goal node.")
                     continue
 
                 path = find_path(start_node, goal_node)
@@ -785,18 +1013,169 @@ def main():
                     continue
 
                 print(f"A* path: {' -> '.join(map(str, path))}")
-                print("Dock-to-tag1 milestone complete. Path driving is not connected yet.")
 
-                mode = MODE_DONE
+                path_index = 0
+                active_from = path[path_index]
+                active_to = path[path_index + 1]
+                active_heading = map_heading(active_from, active_to)
+
+                print(
+                    f"READY FOR PATH: {active_from}->{active_to} "
+                    f"heading={active_heading:.1f}"
+                )
+
+                # Do not run the full path yet.
+                # We stop here for this milestone.
+                mode = MODE_RUN_PATH
                 continue
+                
 
-            # ---------------------------------------------------------------
-            # Draw/debug window
-            # ---------------------------------------------------------------
-            draw_detections(frame, detections, pose, mode)
+            if started and nav is not None:
+                current_segment = (active_from, active_to)
+
+                if nav["final_arrival"]:
+                    print(f"FINAL GOAL REACHED: {goal_node}")
+
+                    send_velocity(
+                        ser,
+                        0.0,
+                        0.0,
+                        0.0,
+                    )
+
+                    started = False
+                    nav = None
+
+                else:
+                    if nav["reached_waypoint"] and active_to != goal_node:
+                        print(f"PASSED WAYPOINT {active_to}")
+
+                        old_heading = active_heading
+
+                        path_index += 1
+
+                        active_from = path[path_index]
+                        active_to = path[path_index + 1]
+                        active_heading = map_heading(active_from, active_to)
+
+                        heading_change = normalize_angle(active_heading - old_heading)
+
+                        print(
+                            f"NEXT SEGMENT {active_from}->{active_to} "
+                            f"heading={active_heading:.1f} "
+                            f"turn={heading_change:.1f}"
+                        )
+
+                        if abs(heading_change) > TURN_HEADING_THRESHOLD_DEG:
+                            print("TURN NEEDED. Stopping before pivot turn.")
+
+                            send_velocity(
+                                ser,
+                                0.0,
+                                0.0,
+                                0.0,
+                            )
+
+                            ok = send_turn_wait_done(
+                                ser,
+                                active_heading,
+                                max_wait_s=15.0,
+                            )
+
+                            if not ok:
+                                print("Turn failed. Aborting navigation.")
+                                stop_robot(ser)
+                                started = False
+                                nav = None
+                                continue
+
+                            print("Turn complete. Checking for valid helper/center tag.")
+
+                            pose_after_turn = wait_for_landmark_pose(
+                                camera,
+                                detector,
+                                active_from,
+                                max_wait_s=5.0,
+                            )
+
+                            if pose_after_turn is None:
+                                print(
+                                    "No valid tag after turn. "
+                                    "Continuing with last known pose."
+                                )
+                            else:
+                                pose = pose_after_turn
+
+                                print(
+                                    f"Valid tag after turn: "
+                                    f"lm={pose['landmark_id']} "
+                                    f"tag={pose['tag']} "
+                                    f"pos={pose['position']} "
+                                    f"lat={pose['lateral']:.4f} "
+                                    f"h={pose['heading']:.2f}"
+                                )
+
+                        nav = compute_navigation_for_segment(
+                            pose,
+                            active_to,
+                            active_heading,
+                            goal_node,
+                            DRIVE_VELOCITY_MPS,
+                        )
+
+                        last_sent_segment = None
+                        last_sent_final_arrival = None
+                        last_sent_pose_landmark = None
+                        last_sent_pose_tag = None
+                        last_sent_arrival_mode = None
+
+                        current_segment = (active_from, active_to)
+
+                    if nav is not None:
+                        should_send = (
+                            current_segment != last_sent_segment
+                            or nav["final_arrival"] != last_sent_final_arrival
+                            or pose["landmark_id"] != last_sent_pose_landmark
+                            or pose["tag"] != last_sent_pose_tag
+                            or nav.get("arrival_mode") != last_sent_arrival_mode
+                            or nav["reached_waypoint"]
+                        )
+
+                        if should_send:
+                            print(
+                                f"SEND VEL {nav['velocity']:.3f} "
+                                f"{nav['desired_heading']:.2f} "
+                                f"{nav['lateral_error']:.4f} "
+                                f"tag={pose['tag']} "
+                                f"pos={pose['position']} "
+                                f"priority={pose['priority']} "
+                                f"raw_lat={pose['raw_lateral']:.4f} "
+                                f"offset={pose['center_lateral_offset']:.4f} "
+                                f"corr_lat={pose['lateral']:.4f} "
+                                f"tag_h={pose['heading']:.2f} "
+                                f"segment={active_from}->{active_to} "
+                                f"arrival_mode={nav.get('arrival_mode')} "
+                                f"reached={nav['reached_waypoint']} "
+                                f"final={nav['final_arrival']}"
+                            )
+
+                            send_velocity(
+                                ser,
+                                nav["velocity"],
+                                nav["desired_heading"],
+                                nav["lateral_error"],
+                            )
+
+                            last_sent_segment = current_segment
+                            last_sent_final_arrival = nav["final_arrival"]
+                            last_sent_pose_landmark = pose["landmark_id"]
+                            last_sent_pose_tag = pose["tag"]
+                            last_sent_arrival_mode = nav.get("arrival_mode")
+
+            draw_detections(frame, detections, pose, nav)
 
             cv2.imshow(
-                "AGV Dock-to-Tag1",
+                "AGV Single File",
                 cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
             )
 
@@ -805,9 +1184,6 @@ def main():
             if key == ord("q"):
                 break
 
-            # ---------------------------------------------------------------
-            # Start from dock tag 0
-            # ---------------------------------------------------------------
             if key == ord("s") and mode == MODE_DOCK_WAIT:
                 if pose is None:
                     print("No valid localization. Cannot start.")
@@ -819,6 +1195,20 @@ def main():
                         f"Detected={pose['landmark_id']}"
                     )
                     continue
+
+    # Save only the first valid dock frame.
+    # Later tag 0 helper frames will not update correction.
+                if not dock_reference_saved:
+                    dock_reference_pose = pose
+                    dock_reference_saved = True
+
+                    print(
+                        f"DOCK_REFERENCE_SAVED "
+                        f"tag={pose['tag']} "
+                        f"pos={pose['position']} "
+                        f"x={pose['lateral']:.4f} "
+                        f"y={pose['forward']:.4f}"
+                    )
 
                 print("Dock tag 0 detected.")
                 print("Calibrating IMU...")
@@ -832,7 +1222,6 @@ def main():
                 if not zero_heading(ser):
                     print("Failed to zero heading.")
                     continue
-
                 print("Enabling motors...")
 
                 if not enable_motors(ser):
@@ -842,11 +1231,9 @@ def main():
                 print("Moving from dock tag 0 to tag 1.")
 
                 mode = MODE_DOCK_TO_TAG1
-                continue
+                started = False
 
-            if mode == MODE_DONE:
-                # Keep camera/debug open. Press q to quit.
-                pass
+                continue
 
     finally:
         try:
