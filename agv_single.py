@@ -1,6 +1,7 @@
 import math
 import time
 import json
+import threading
 
 import cv2
 import serial
@@ -9,6 +10,16 @@ from pupil_apriltags import Detector
 
 
 #Config Files
+
+# global variables for threading
+latest_frame = None
+latest_detections = []
+latest_pose = None
+latest_key = -1
+latest_frame_id = 0
+
+latest_lock = threading.Lock()
+camera_running = True
 
 MAP_FILE = "./maps/testbed.json"
 
@@ -817,6 +828,7 @@ def draw_detections(frame, detections, pose=None, nav=None):
             f"pos={pose['position']} "
             f"pri={pose['priority']} "
             f"lat={pose['lateral']:.4f} "
+            f"fwd={pose['forward']:.4f} "
             f"h={pose['heading']:.2f} "
             f"visible={pose['visible_tags']}"
         )
@@ -866,31 +878,67 @@ def wait_for_landmark_pose(camera, detector, landmark_id, max_wait_s=5.0):
     deadline = time.monotonic() + max_wait_s
 
     while time.monotonic() < deadline:
+        with latest_lock:
+            pose = latest_pose
+
+        if pose is not None and pose["landmark_id"] == landmark_id:
+            return pose
+        time.sleep(0.01)
+
+    return None
+
+# camera threading
+
+def camera_worker(camera, detector):
+    global latest_frame
+    global latest_detections
+    global latest_pose
+    global latest_key
+    global latest_frame_id
+    global camera_running
+
+    while camera_running:
         frame = camera.capture_array()
         detections = detect_tags(detector, frame)
         pose = estimate_pose_from_tags(detections)
 
-        draw_detections(frame, detections, pose, None)
+        display_frame = draw_detections(
+            frame.copy(),
+            detections,
+            pose,
+            None,
+        )
 
         cv2.imshow(
             "AGV Single File",
-            cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
+            cv2.cvtColor(display_frame, cv2.COLOR_RGB2BGR),
         )
 
-        cv2.waitKey(1)
+        key = cv2.waitKey(1) & 0xFF
 
-        if pose is not None and pose["landmark_id"] == landmark_id:
-            return pose
+        with latest_lock:
+            latest_frame = frame
+            latest_detections = detections
+            latest_pose = pose
+            latest_key = key
+            latest_frame_id += 1
 
-    return None
-
-
+        time.sleep(0.002)
 # Main
 
 def main():
+    global camera_running
+    global latest_key
     camera = start_camera()
     detector = create_detector()
     ser = open_serial()
+    camera_thread = threading.Thread(
+        target=camera_worker,
+        args=(camera, detector),
+        daemon=True,
+    )
+
+    camera_thread.start()
 
     started = False
 
@@ -901,6 +949,7 @@ def main():
 
     dock_reference_pose = None
     dock_reference_saved = False
+    last_tag1_forward = None
 
     start_node = None
     goal_node = None
@@ -915,22 +964,33 @@ def main():
     last_sent_pose_tag = None
     last_sent_arrival_mode = None
 
-    def show_frame(frame, detections, pose= None, nav=None):
-        draw_detections(frame, detections, pose, nav)
-        cv2.imshow("AGV Single File", cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-        return cv2.waitKey(1) & 0xFF
+    last_processed_frame_id = -1
 
     print("==========================================")
     print("AGV A* Single File Controller")
     print("Press 's' to calibrate/start.")
     print("Press 'q' to quit.")
     print("==========================================")
-
+    
     try:
         while True:
-            frame = camera.capture_array()
-            detections = detect_tags(detector, frame)
-            pose = estimate_pose_from_tags(detections)
+            with latest_lock:
+                pose = latest_pose
+                key = latest_key
+                frame_id = latest_frame_id
+                latest_key = -1
+            
+            if frame_id == 0:
+                time.sleep(0.01)
+                continue
+
+            if frame_id == last_processed_frame_id:
+                time.sleep(0.002)
+                continue
+
+            last_processed_frame_id = frame_id
+
+
 
             nav = None
 
@@ -958,43 +1018,6 @@ def main():
                 # ------------------------------------------------------------
                 if pose is None:
                     print("No_TAG_GAP 0->1, sending nothing.")
-
-                    draw_detections(frame, detections, pose, nav)
-                    cv2.imshow(
-                        "AGV Single File",
-                        cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
-                    )
-
-                    key = cv2.waitKey(1) & 0xFF
-
-                    if key == ord("q"):
-                        break
-
-                    continue
-
-                # ------------------------------------------------------------
-                # Stop only when tag 1 centre row is reached.
-                # ------------------------------------------------------------
-                if tag1_centre_reached(pose):
-                    send_velocity(ser, 0.0, 0.0, 0.0)
-
-                    print("Tag1 reached.")
-                    print("Enter start and goal node.")
-
-                    mode = MODE_WAIT_TASK
-                    started = False
-
-                    draw_detections(frame, detections, pose, nav)
-                    cv2.imshow(
-                        "AGV Single File",
-                        cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
-                    )
-
-                    key = cv2.waitKey(1) & 0xFF
-
-                    if key == ord("q"):
-                        break
-
                     continue
 
                 # ------------------------------------------------------------
@@ -1003,6 +1026,8 @@ def main():
                 # Send APP with x_lateral and y_lateral.
                 # ------------------------------------------------------------
                 if pose["landmark_id"] == FIRST_NODE:
+                    x_error = pose["lateral"]
+                    y_error = pose["forward"]
                     print(
                         f"TAG1_APPROACH "
                         f"tag={pose['tag']} "
@@ -1010,7 +1035,27 @@ def main():
                         f"x={pose['lateral']:.4f} "
                         f"y={pose['forward']:.4f}"
                     )
+                    reached_y_centre = False
 
+                    if y_error is not None:
+                        if last_tag1_forward is None:
+                            if last_tag1_forward > 0.0 and y_error <= 0.0:
+                                reached_y_centre = True
+
+                        last_tag1_forward = y_error
+                    
+                    if reached_y_centre:
+                        send_velocity(ser, 0.0, 0.0, 0.0)
+
+                        print("Tag1 y-center crossed.")
+                        print("Tag1 reached.")
+                        print("Enter start and goal node.")
+
+                        mode = MODE_WAIT_TASK
+                        started = False
+                        continue
+
+                    
                     send_approach(
                         ser,
                         ARRIVAL_VELOCITY_MPS,
@@ -1018,18 +1063,6 @@ def main():
                         pose["lateral"],
                         pose["forward"],
                     )
-
-                    draw_detections(frame, detections, pose, nav)
-                    cv2.imshow(
-                        "AGV Single File",
-                        cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
-                    )
-
-                    key = cv2.waitKey(1) & 0xFF
-
-                    if key == ord("q"):
-                        break
-
                     continue
 
                 # ------------------------------------------------------------
@@ -1045,17 +1078,6 @@ def main():
                         f"sending nothing"
                     )
 
-                    draw_detections(frame, detections, pose, nav)
-                    cv2.imshow(
-                        "AGV Single File",
-                        cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
-                    )
-
-                    key = cv2.waitKey(1) & 0xFF
-
-                    if key == ord("q"):
-                        break
-
                     continue
 
                 # ------------------------------------------------------------
@@ -1069,21 +1091,9 @@ def main():
                     f"sending nothing"
                 )
 
-                draw_detections(frame, detections, pose, nav)
-                cv2.imshow(
-                    "AGV Single File",
-                    cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
-                )
-
-                key = cv2.waitKey(1) & 0xFF
-
-                if key == ord("q"):
-                    break
-
                 continue
 
             if mode == MODE_WAIT_TASK:
-                send_velocity(ser, 0.0, 0.0, 0.0)
 
                 try:
                     start_node = int(input("Enter start node: "))
@@ -1271,15 +1281,6 @@ def main():
                             last_sent_pose_tag = pose["tag"]
                             last_sent_arrival_mode = nav.get("arrival_mode")
 
-            draw_detections(frame, detections, pose, nav)
-
-            cv2.imshow(
-                "AGV Single File",
-                cv2.cvtColor(frame, cv2.COLOR_RGB2BGR),
-            )
-
-            key = cv2.waitKey(1) & 0xFF
-
             if key == ord("q"):
                 break
 
@@ -1344,12 +1345,19 @@ def main():
                     dock_desired_heading,
                     dock_reference_pose["lateral"],
                 )
+                last_tag1_forward = None
+
                 mode = MODE_DOCK_TO_TAG1
                 started = False
 
                 continue
 
     finally:
+        camera_running = False
+        try:
+            camera_thread.join(timeout=1.0)
+        except Exception as exc:
+            print("Camera thread warning:", exc)
         try:
             stop_robot(ser)
             disable_motors(ser)
