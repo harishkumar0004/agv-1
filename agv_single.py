@@ -1441,20 +1441,33 @@ def main():
                     )
 
                     reached_y_centre = False
+                    center_zone = is_center_zone_for_heading(pose, active_heading)
+                    
+                    if y_error is None:
+                        print(f"{current_type.upper()}_APP y=None, sending nothing")
+                        continue
 
-                    if y_error is not None:
+                    if center_zone:
                         if last_arrival_forward is not None:
                             if last_arrival_forward > 0.0 and y_error <= 0.0:
                                 reached_y_centre = True
+
                         else:
                             if y_error <= 0.0:
                                 reached_y_centre = True
 
                         last_arrival_forward = y_error
+                    
+                    else:
+                        print(
+                            f"{current_type.upper()}_HELPER_NO_STOP "
+                            f"lm={active_to} "
+                            f"tag={pose['tag']} "
+                            f"pos={pose['position']} "
+                            f"x={x_error:.4f} "
+                            f"corr_y={y_error:.4f}"
+                        )
 
-                    if y_error is None:
-                        print(f"{current_type.upper()}_APP y=None, sending nothing")
-                        continue
                     if not reached_y_centre:
                         send_approach(
                             ser,
@@ -1465,12 +1478,12 @@ def main():
                         )
                         continue
 
-                    send_velocity(ser, 0.0, 0.0, 0.0)
-
                     print(
                         f"{current_type.upper()}_CENTER_REACHED "
                         f"lm={active_to}"
                     )
+
+                    send_velocity(ser, 0.0, 0.0, 0.0)
 
                     # --------------------------------------------------------
                     # FINAL GOAL
@@ -1555,148 +1568,6 @@ def main():
                     leaving_ignore_landmark = next_from
                     last_arrival_forward = None
                     continue
-
-            # if started and nav is not None:
-            #     current_segment = (active_from, active_to)
-
-            #     if nav["final_arrival"]:
-            #         print(f"FINAL GOAL REACHED: {goal_node}")
-
-            #         send_velocity(
-            #             ser,
-            #             0.0,
-            #             0.0,
-            #             0.0,
-            #         )
-
-            #         started = False
-            #         nav = None
-
-            #     else:
-            #         if nav["reached_waypoint"] and active_to != goal_node:
-            #             print(f"PASSED WAYPOINT {active_to}")
-
-            #             old_heading = active_heading
-
-            #             path_index += 1
-
-            #             active_from = path[path_index]
-            #             active_to = path[path_index + 1]
-            #             active_heading = map_heading(active_from, active_to)
-
-            #             heading_change = normalize_angle(active_heading - old_heading)
-
-            #             print(
-            #                 f"NEXT SEGMENT {active_from}->{active_to} "
-            #                 f"heading={active_heading:.1f} "
-            #                 f"turn={heading_change:.1f}"
-            #             )
-
-            #             if abs(heading_change) > TURN_HEADING_THRESHOLD_DEG:
-            #                 print("TURN NEEDED. Stopping before pivot turn.")
-
-            #                 send_velocity(
-            #                     ser,
-            #                     0.0,
-            #                     0.0,
-            #                     0.0,
-            #                 )
-
-            #                 ok = send_turn_wait_done(
-            #                     ser,
-            #                     active_heading,
-            #                     max_wait_s=15.0,
-            #                 )
-
-            #                 if not ok:
-            #                     print("Turn failed. Aborting navigation.")
-            #                     stop_robot(ser)
-            #                     started = False
-            #                     nav = None
-            #                     continue
-
-            #                 print("Turn complete. Checking for valid helper/center tag.")
-
-            #                 pose_after_turn = wait_for_landmark_pose(
-            #                     camera,
-            #                     detector,
-            #                     active_from,
-            #                     max_wait_s=5.0,
-            #                 )
-
-            #                 if pose_after_turn is None:
-            #                     print(
-            #                         "No valid tag after turn. "
-            #                         "Continuing with last known pose."
-            #                     )
-            #                 else:
-            #                     pose = pose_after_turn
-
-            #                     print(
-            #                         f"Valid tag after turn: "
-            #                         f"lm={pose['landmark_id']} "
-            #                         f"tag={pose['tag']} "
-            #                         f"pos={pose['position']} "
-            #                         f"lat={pose['lateral']:.4f} "
-            #                         f"h={pose['heading']:.2f}"
-            #                     )
-
-            #             nav = compute_navigation_for_segment(
-            #                 pose,
-            #                 active_to,
-            #                 active_heading,
-            #                 goal_node,
-            #                 DRIVE_VELOCITY_MPS,
-            #             )
-
-            #             last_sent_segment = None
-            #             last_sent_final_arrival = None
-            #             last_sent_pose_landmark = None
-            #             last_sent_pose_tag = None
-            #             last_sent_arrival_mode = None
-
-            #             current_segment = (active_from, active_to)
-
-            #         if nav is not None:
-            #             should_send = (
-            #                 current_segment != last_sent_segment
-            #                 or nav["final_arrival"] != last_sent_final_arrival
-            #                 or pose["landmark_id"] != last_sent_pose_landmark
-            #                 or pose["tag"] != last_sent_pose_tag
-            #                 or nav.get("arrival_mode") != last_sent_arrival_mode
-            #                 or nav["reached_waypoint"]
-            #             )
-
-            #             if should_send:
-            #                 print(
-            #                     f"SEND VEL {nav['velocity']:.3f} "
-            #                     f"{nav['desired_heading']:.2f} "
-            #                     f"{nav['lateral_error']:.4f} "
-            #                     f"tag={pose['tag']} "
-            #                     f"pos={pose['position']} "
-            #                     f"priority={pose['priority']} "
-            #                     f"raw_lat={pose['raw_lateral']:.4f} "
-            #                     f"offset={pose['center_lateral_offset']:.4f} "
-            #                     f"corr_lat={pose['lateral']:.4f} "
-            #                     f"tag_h={pose['heading']:.2f} "
-            #                     f"segment={active_from}->{active_to} "
-            #                     f"arrival_mode={nav.get('arrival_mode')} "
-            #                     f"reached={nav['reached_waypoint']} "
-            #                     f"final={nav['final_arrival']}"
-            #                 )
-
-            #                 send_velocity(
-            #                     ser,
-            #                     nav["velocity"],
-            #                     nav["desired_heading"],
-            #                     nav["lateral_error"],
-            #                 )
-
-            #                 last_sent_segment = current_segment
-            #                 last_sent_final_arrival = nav["final_arrival"]
-            #                 last_sent_pose_landmark = pose["landmark_id"]
-            #                 last_sent_pose_tag = pose["tag"]
-            #                 last_sent_arrival_mode = nav.get("arrival_mode")
 
             if key == ord("q"):
                 break
