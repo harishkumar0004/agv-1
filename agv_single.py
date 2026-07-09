@@ -10,6 +10,8 @@ from pupil_apriltags import Detector
 
 
 #Config Files
+TAG_HEADING_OFFSET_GAIN = 1.0
+MAX_TAG_HEADING_OFFSET_DEG = 10.0
 
 # global variables for threading
 latest_frame = None
@@ -143,9 +145,7 @@ def tag_priority(position):
     return TAG_PRIORITY_BY_POSITION.get(position, 99)
 
 
-# ============================================================================
-# APRILTAG POSE HELPERS
-# ============================================================================
+#apriltag pose helpers
 
 def compute_heading(detection):
     if detection.pose_R is None:
@@ -171,10 +171,7 @@ def compute_forward(detection):
 
     return float(detection.pose_t[1][0])
 
-
-# ============================================================================
-# MAP AND A* PATH
-# ============================================================================
+# Map loading
 
 def landmark_by_id(landmark_id):
     for landmark in MAP_DATA["landmarks"]:
@@ -296,9 +293,7 @@ def map_heading(current_id, next_id):
     return None
 
 
-# ============================================================================
-# WAYPOINT / ARRIVAL GATE
-# ============================================================================
+# Arrival Gate
 
 def waypoint_positions_for_heading(heading_deg):
     heading_deg = normalize_angle(heading_deg)
@@ -342,9 +337,8 @@ def waypoint_reached_for_segment(pose, active_to, active_heading):
     return pose["position"] in allowed_positions
 
 
-# ============================================================================
 # CAMERA AND DETECTOR
-# ============================================================================
+
 
 def start_camera():
     camera = Picamera2()
@@ -997,6 +991,31 @@ def is_center_zone_for_heading(pose, active_heading):
     allowed_positions = waypoint_positions_for_heading(active_heading)
 
     return pose["position"] in allowed_positions
+
+# correct map heading from tag
+def corrected_map_heading_from_tag(map_heading, tag_heading):
+    """
+    Tag verifies global heading by rotating the tag in the correct direction.
+    This function corrects the map heading based on the tag heading.
+    """
+
+    if tag_heading is None:
+        return map_heading
+    
+    tag_error = normalize_angle(map_heading - tag_heading)
+
+    tag_error = clamp(tag_error, -MAX_TAG_HEADING_OFFSET_DEG, MAX_TAG_HEADING_OFFSET_DEG)
+    
+    tag_offset = TAG_HEADING_OFFSET_GAIN * tag_error
+    
+    corrected_heading = normalize_angle(map_heading + tag_offset)
+    print(f"TAG_HEADING_VERIFY "
+          f"map={map_heading:.2f} "
+          f"tag={tag_heading:.2f} "
+          f"tag_error={tag_error:.2f} "
+          f"tag_offset={tag_offset:.2f} "
+          f"corrected={corrected_heading:.2f}")
+    return corrected_heading
 # Main
 
 def main():
@@ -1292,11 +1311,12 @@ def main():
                     f"tag_heading={pose['heading']:.2f} "
                     f"x={pose['lateral']:.4f}"
                 )
+                corrected_heading = corrected_map_heading_from_tag(active_heading, pose["heading"],)
 
                 send_velocity(
                     ser,
                     DRIVE_VELOCITY_MPS,
-                    active_heading,
+                    corrected_heading,
                     pose["lateral"],
                 )
 
@@ -1406,11 +1426,15 @@ def main():
                     active_to = path[path_index + 1]
                     active_heading = map_heading(active_from, active_to)
                     current_robot_heading = active_heading
+                    corrected_heading = corrected_map_heading_from_tag(
+                        active_heading,
+                        pose["heading"],
+                    )
 
                     send_velocity(
                         ser,
                         DRIVE_VELOCITY_MPS,
-                        active_heading,
+                        corrected_heading,
                         pose["lateral"],
                     )
 
@@ -1469,11 +1493,15 @@ def main():
                             f"corr_y={y_error:.4f}"
                         )
 
+                    corrected_heading = corrected_map_heading_from_tag(
+                        active_heading,
+                        pose["heading"],
+                    )
                     if not reached_y_centre:
                         send_approach(
                             ser,
                             ARRIVAL_VELOCITY_MPS,
-                            active_heading,
+                            corrected_heading,
                             x_error,
                             y_error,
                         )
@@ -1559,11 +1587,15 @@ def main():
                     )
 
                     path_index += 1
-
+                    
+                    corrected_heading = corrected_map_heading_from_tag(
+                        next_heading,
+                        pose_after_turn["heading"],
+                    )
                     send_velocity(
                         ser,
                         DRIVE_VELOCITY_MPS,
-                        next_heading,
+                        corrected_heading,
                         pose_after_turn["lateral"],
                     )
 
