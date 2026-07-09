@@ -11,7 +11,7 @@ from pupil_apriltags import Detector
 
 #Config Files
 TAG_HEADING_OFFSET_GAIN = 1.0
-MAX_TAG_HEADING_OFFSET_DEG = 10.0
+MAX_TAG_HEADING_OFFSET_DEG = 3.0
 
 # global variables for threading
 latest_frame = None
@@ -1016,6 +1016,18 @@ def corrected_map_heading_from_tag(map_heading, tag_heading):
           f"tag_offset={tag_offset:.2f} "
           f"corrected={corrected_heading:.2f}")
     return corrected_heading
+
+# for 180 degree correction sign to the steer the agv in right direction
+def lateral_for_heading(pose, active_heading):
+    x = pose["lateral"]
+    h = normalize_angle(active_heading)
+
+    # for 180 degree travel, camera x correction needs opposite sign
+
+    if abs(normalize_angle(h - 180.0)) < 1.0:
+        return -x
+    
+    return x
 # Main
 
 def main():
@@ -1312,12 +1324,12 @@ def main():
                     f"x={pose['lateral']:.4f}"
                 )
                 corrected_heading = corrected_map_heading_from_tag(active_heading, pose["heading"],)
-
+                x_cmd = lateral_for_heading(pose, active_heading)
                 send_velocity(
                     ser,
                     DRIVE_VELOCITY_MPS,
                     corrected_heading,
-                    pose["lateral"],
+                    x_cmd,
                 )
 
                 leaving_ignore_landmark = start_node
@@ -1430,12 +1442,12 @@ def main():
                         active_heading,
                         pose["heading"],
                     )
-
+                    x_cmd = lateral_for_heading(pose, active_heading)
                     send_velocity(
                         ser,
                         DRIVE_VELOCITY_MPS,
                         corrected_heading,
-                        pose["lateral"],
+                        x_cmd,
                     )
 
                     leaving_ignore_landmark = active_from
