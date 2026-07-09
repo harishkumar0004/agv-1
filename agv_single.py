@@ -11,7 +11,7 @@ from pupil_apriltags import Detector
 
 #Config Files
 TAG_HEADING_OFFSET_GAIN = 1.0
-MAX_TAG_HEADING_OFFSET_DEG = 3.0
+MAX_TAG_HEADING_OFFSET_DEG = 1.0
 
 # global variables for threading
 latest_frame = None
