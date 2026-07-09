@@ -1192,8 +1192,19 @@ def main():
                     continue
                 print(f"Start Node: {start_node}")
                 print(f"Goal Node: {goal_node}")
-                if start_node != FIRST_NODE:
-                    print("Robot is physically at tag 1, so start node should be 1.")
+                with latest_lock:
+                    pose = latest_pose
+
+                if pose is None:
+                    print("No valid current pose. Cannot start.")
+                    continue
+
+                if pose["landmark_id"] != start_node:
+                    print(
+                        f"Start node mismatch. "
+                        f"Robot is seeing tag {pose['landmark_id']}, "
+                        f"but you entered start {start_node}."
+                    )
                     continue
 
                 if landmark_by_id(start_node) is None:
@@ -1226,7 +1237,7 @@ def main():
                     pose = latest_pose
 
                 if pose is None or pose["landmark_id"] != start_node:
-                    print("No valid start pose at node 1. Cannot leave.")
+                    print("No valid start pose at entered start node. Cannot leave.")
                     continue
 
                 first_heading_change = normalize_angle(active_heading - current_robot_heading)
@@ -1480,10 +1491,11 @@ def main():
                     # --------------------------------------------------------
                     if current_type == "goal":
                         print(f"FINAL GOAL REACHED: {goal_node}")
+                        current_robot_heading = active_heading
                         mode = MODE_WAIT_TASK
                         started = False
                         last_arrival_forward = None
-                        leaving_ignore_landmark = active_to
+                        leaving_ignore_landmark = None
                         continue
 
                     # --------------------------------------------------------
