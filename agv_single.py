@@ -1024,7 +1024,7 @@ def lateral_for_heading(pose, active_heading):
 
     # for 180 degree travel, camera x correction needs opposite sign
 
-    if abs(normalize_angle(h - 180.0)) < 1.0:
+    if abs(normalize_angle(h - 180.0)) < 5.0:
         return -x
     
     return x
