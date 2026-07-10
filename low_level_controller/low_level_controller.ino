@@ -59,14 +59,14 @@ constexpr float HEADING_MAX_DEG = 180.0f;
 constexpr float HEADING_MIN_DEG = -180.0f;
 
 // Controller
-constexpr float HEADING_KP = 0.60f;
+constexpr float HEADING_KP = 0.40f;
 
 constexpr float TAG_SPACING_M = 0.50f;
-constexpr float LATERAL_CORRECTION_DISTANCE_RATIO = 0.50f;
+constexpr float LATERAL_CORRECTION_DISTANCE_RATIO = 0.70f;
 constexpr float LATERAL_GAIN = 1.0f;
 
-constexpr float MAX_LATERAL_HEADING_BIAS_DEG = 10.0f;
-constexpr float MAX_STEERING = 0.08f;
+constexpr float MAX_LATERAL_HEADING_BIAS_DEG = 5.0f;
+constexpr float MAX_STEERING = 0.06f;
 constexpr float STEERING_DIRECTION = 1.0f;
 
 // Timing
