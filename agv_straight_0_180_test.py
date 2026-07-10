@@ -14,7 +14,7 @@ from pupil_apriltags import Detector
 # ============================================================
 
 TAG_HEADING_OFFSET_GAIN = 1.0
-MAX_TAG_HEADING_OFFSET_DEG = 1.0
+MAX_TAG_HEADING_OFFSET_DEG = 3.0
 
 DOCK_NODE = 0
 FIRST_NODE = 1
@@ -445,16 +445,16 @@ def corrected_map_heading_from_tag(map_heading, tag_heading):
     return corrected_heading
 
 
-def lateral_command_for_heading(x_corrected, active_heading, tag_heading):
-    h = normalize_angle(active_heading)
+# def lateral_command_for_heading(x_corrected, active_heading, tag_heading):
+#     h = normalize_angle(active_heading)
 
-    if abs(normalize_angle(h - 0.0)) < 3.0:
-        return x_corrected
+#     if abs(normalize_angle(h - 0.0)) < 3.0:
+#         return x_corrected
 
-    if abs(abs(h) - 180.0) < 3.0:
-        return -x_corrected
+#     if abs(abs(h) - 180.0) < 3.0:
+#         return -x_corrected
 
-    return x_corrected
+#     return x_corrected
 
 # ============================================================
 # CAMERA
@@ -1098,7 +1098,7 @@ def main():
                 )
 
                 x_corrected = lateral_pose_for_heading(pose, test_heading)
-                x_cmd = lateral_command_for_heading(x_corrected, test_heading, pose["heading"])
+                x_cmd = x_corrected
 
                 print(
                     f"STRAIGHT_START_DEPARTURE "
@@ -1177,11 +1177,7 @@ def main():
                     )
 
                     x_corrected = lateral_pose_for_heading(pose, active_heading)
-                    x_cmd = lateral_command_for_heading(
-                        x_corrected,
-                        active_heading,
-                        pose["heading"],
-                    )
+                    x_cmd = x_corrected
 
                     if not is_center_zone_for_heading(pose, active_heading):
                         print(
@@ -1231,7 +1227,7 @@ def main():
                 # FINAL GOAL
                 # --------------------------------------------------------
                 x_corrected = lateral_pose_for_heading(pose, active_heading)
-                x_cmd = lateral_command_for_heading(x_corrected, active_heading, pose["heading"],)
+                x_cmd = x_corrected
                 y_error = corrected_forward_for_heading(pose, active_heading)
 
                 raw_y_text = "None" if pose["forward"] is None else f"{pose['forward']:.4f}"
