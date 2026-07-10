@@ -1108,7 +1108,7 @@ def main():
                 )
 
                 x_corrected = lateral_pose_for_heading(pose, test_heading)
-                x_cmd = lateral_command_for_heading(x_corrected, test_heading)
+                x_cmd = lateral_command_for_heading(x_corrected, test_heading, pose["heading"])
 
                 print(
                     f"STRAIGHT_START_DEPARTURE "
