@@ -450,7 +450,7 @@ def lateral_command_for_heading(x_corrected, active_heading):
 
     # 180 degree steering command sign is opposite
     if abs(abs(h) - 180.0) < 5.0:
-        return -x_corrected
+        return x_corrected
 
     return x_corrected
 
