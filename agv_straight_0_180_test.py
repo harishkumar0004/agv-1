@@ -445,13 +445,15 @@ def corrected_map_heading_from_tag(map_heading, tag_heading):
     return corrected_heading
 
 
-def lateral_command_for_heading(x_corrected, active_heading, tag_heading):
+def lateral_command_for_heading(x_corrected, active_heading):
     h = normalize_angle(active_heading)
 
-    # 180 degree steering command sign is opposite
+    if abs(normalize_angle(h - 0.0)) < 3.0:
+        return x_corrected
+
     if abs(abs(h) - 180.0) < 3.0:
         return -x_corrected
-        
+
     return x_corrected
 
 # ============================================================
