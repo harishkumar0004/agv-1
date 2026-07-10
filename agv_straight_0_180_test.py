@@ -1096,8 +1096,8 @@ def main():
                     pose["heading"],
                 )
 
-                x_corrected = lateral_pose_for_heading(pose, active_heading)
-                x_cmd = lateral_command_for_heading(x_corrected, active_heading)
+                x_corrected = lateral_pose_for_heading(pose, test_heading)
+                x_cmd = lateral_command_for_heading(x_corrected, test_heading)
 
                 print(
                     f"STRAIGHT_START_DEPARTURE "
@@ -1105,7 +1105,8 @@ def main():
                     f"to={path[1]} "
                     f"heading={test_heading:.1f} "
                     f"tag_heading={pose['heading']:.2f} "
-                    f"x_raw={pose['lateral']:.4f} "
+                    f"x_raw={pose['raw_lateral']:.4f} "
+                    f"x_corrected={x_corrected:.4f} "
                     f"x_cmd={x_cmd:.4f}"
                 )
 
