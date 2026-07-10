@@ -189,6 +189,39 @@ TAG_PRIORITY_BY_POSITION = {
 def tag_priority(position):
     return TAG_PRIORITY_BY_POSITION.get(position, 99)
 
+def helper_lateral_offset_for_heading(position, heading_deg):
+    h = normalize_angle(heading_deg)
+
+    # 0 degree movement
+    if abs(normalize_angle(h - 0.0)) < 5.0:
+        if position in ("east", "north_east", "south_east"):
+            return HELPER_SPACING_M
+        if position in ("west", "north_west", "south_west"):
+            return -HELPER_SPACING_M
+        return 0.0
+
+    # 180 degree movement
+    if abs(abs(h) - 180.0) < 5.0:
+        if position in ("east", "north_east", "south_east"):
+            return -HELPER_SPACING_M
+        if position in ("west", "north_west", "south_west"):
+            return HELPER_SPACING_M
+        return 0.0
+
+    return 0.0
+
+def lateral_pose_for_heading(pose, active_heading):
+    if pose is None:
+        return 0.0
+
+    raw_x = pose["raw_lateral"]
+
+    offset = helper_lateral_offset_for_heading(
+        pose["position"],
+        active_heading,
+    )
+
+    return raw_x + offset
 
 def helper_lateral_offset(position):
     if position in ("east", "north_east", "south_east"):
@@ -412,18 +445,14 @@ def corrected_map_heading_from_tag(map_heading, tag_heading):
     return corrected_heading
 
 
-def lateral_for_heading(pose, active_heading):
-    """
-    0 degree  : use x as it is.
-    180 degree: invert x so physical steering direction is tested separately.
-    """
-    x = pose["lateral"]
+def lateral_command_for_heading(x_corrected, active_heading):
     h = normalize_angle(active_heading)
 
+    # 180 degree steering command sign is opposite
     if abs(abs(h) - 180.0) < 5.0:
-        return -x
+        return -x_corrected
 
-    return x
+    return x_corrected
 
 
 # ============================================================
@@ -1067,7 +1096,8 @@ def main():
                     pose["heading"],
                 )
 
-                x_cmd = lateral_for_heading(pose, test_heading)
+                x_corrected = lateral_pose_for_heading(pose, active_heading)
+                x_cmd = lateral_command_for_heading(x_corrected, active_heading)
 
                 print(
                     f"STRAIGHT_START_DEPARTURE "
@@ -1154,7 +1184,8 @@ def main():
                         pose["heading"],
                     )
 
-                    x_cmd = lateral_for_heading(pose, active_heading)
+                    x_corrected = lateral_pose_for_heading(pose, active_heading)
+                    x_cmd = lateral_command_for_heading(x_corrected, active_heading)
 
                     print(
                         f"PASSTHROUGH_CENTER "
@@ -1182,7 +1213,8 @@ def main():
                 # --------------------------------------------------------
                 # FINAL GOAL
                 # --------------------------------------------------------
-                x_cmd = lateral_for_heading(pose, active_heading)
+                x_corrected = lateral_pose_for_heading(pose, active_heading)
+                x_cmd = lateral_command_for_heading(x_corrected, active_heading)
                 y_error = corrected_forward_for_heading(pose, active_heading)
 
                 raw_y_text = "None" if pose["forward"] is None else f"{pose['forward']:.4f}"
