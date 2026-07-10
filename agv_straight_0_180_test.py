@@ -445,14 +445,25 @@ def corrected_map_heading_from_tag(map_heading, tag_heading):
     return corrected_heading
 
 
-def lateral_command_for_heading(x_corrected, active_heading):
+def lateral_command_for_heading(x_corrected, active_heading, tag_heading):
     h = normalize_angle(active_heading)
 
     # 180 degree steering command sign is opposite
     if abs(abs(h) - 180.0) < 3.0:
-        return -x_corrected
+        if tag_heading is None:
+            return x_corrected
 
+        tag_h = normalize_angle(tag_heading)
+
+        # Important:
+        # Near +180 and near -180 must not be treated the same.
+        if tag_h >= 0.0:
+            return -x_corrected
+        else:
+            return x_corrected
+        
     return x_corrected
+
 
 
 # ============================================================
@@ -1186,7 +1197,7 @@ def main():
                     )
 
                     x_corrected = lateral_pose_for_heading(pose, active_heading)
-                    x_cmd = lateral_command_for_heading(x_corrected, active_heading)
+                    x_cmd = lateral_command_for_heading(x_corrected, active_heading, pose["heading"])
 
                     print(
                         f"PASSTHROUGH_CENTER "
@@ -1215,7 +1226,7 @@ def main():
                 # FINAL GOAL
                 # --------------------------------------------------------
                 x_corrected = lateral_pose_for_heading(pose, active_heading)
-                x_cmd = lateral_command_for_heading(x_corrected, active_heading)
+                x_cmd = lateral_command_for_heading(x_corrected, active_heading, pose["heading"],)
                 y_error = corrected_forward_for_heading(pose, active_heading)
 
                 raw_y_text = "None" if pose["forward"] is None else f"{pose['forward']:.4f}"
