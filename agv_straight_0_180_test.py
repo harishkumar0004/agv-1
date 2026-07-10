@@ -450,21 +450,9 @@ def lateral_command_for_heading(x_corrected, active_heading, tag_heading):
 
     # 180 degree steering command sign is opposite
     if abs(abs(h) - 180.0) < 3.0:
-        if tag_heading is None:
-            return x_corrected
-
-        tag_h = normalize_angle(tag_heading)
-
-        # Important:
-        # Near +180 and near -180 must not be treated the same.
-        if tag_h >= 0.0:
-            return -x_corrected
-        else:
-            return x_corrected
+        return -x_corrected
         
     return x_corrected
-
-
 
 # ============================================================
 # CAMERA
@@ -1181,23 +1169,37 @@ def main():
                 # PASS THROUGH
                 # --------------------------------------------------------
                 if not is_goal:
-                    if not is_center_zone_for_heading(pose, active_heading):
-                        print(
-                            f"PASSTHROUGH_ENTRY_EXIT_IGNORE "
-                            f"lm={active_to} "
-                            f"tag={pose['tag']} "
-                            f"pos={pose['position']} "
-                            f"sending nothing"
-                        )
-                        continue
-
                     corrected_heading = corrected_map_heading_from_tag(
                         active_heading,
                         pose["heading"],
                     )
 
                     x_corrected = lateral_pose_for_heading(pose, active_heading)
-                    x_cmd = lateral_command_for_heading(x_corrected, active_heading, pose["heading"])
+                    x_cmd = lateral_command_for_heading(
+                        x_corrected,
+                        active_heading,
+                        pose["heading"],
+                    )
+
+                    if not is_center_zone_for_heading(pose, active_heading):
+                        print(
+                            f"PASSTHROUGH_HELPER_CORRECT "
+                            f"lm={active_to} "
+                            f"tag={pose['tag']} "
+                            f"pos={pose['position']} "
+                            f"heading={pose['heading']:.2f} "
+                            f"x_raw={pose['raw_lateral']:.4f} "
+                            f"x_corrected={x_corrected:.4f} "
+                            f"x_cmd={x_cmd:.4f}"
+                        )
+
+                        send_velocity(
+                            ser,
+                            DRIVE_VELOCITY_MPS,
+                            corrected_heading,
+                            x_cmd,
+                        )
+                        continue
 
                     print(
                         f"PASSTHROUGH_CENTER "
@@ -1205,7 +1207,8 @@ def main():
                         f"tag={pose['tag']} "
                         f"pos={pose['position']} "
                         f"heading={pose['heading']:.2f} "
-                        f"x_raw={pose['lateral']:.4f} "
+                        f"x_raw={pose['raw_lateral']:.4f} "
+                        f"x_corrected={x_corrected:.4f} "
                         f"x_cmd={x_cmd:.4f}"
                     )
 
