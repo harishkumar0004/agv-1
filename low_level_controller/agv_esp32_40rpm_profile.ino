@@ -33,12 +33,18 @@ constexpr float STEPS_PER_METER = STEPS_PER_WHEEL_REV / WHEEL_CIRCUMFERENCE_M;
 
 constexpr float TRACK_WIDTH_M = 0.355f;
 // Motion limits
-constexpr float MAX_LINEAR_VELOCITY_MPS = 0.10f;
-constexpr float MAX_STEP_RATE = 5000.0f;
+// 40 wheel RPM with a 0.117 m wheel is about 0.245 m/s.
+// Keep some headroom for steering, where one wheel runs faster.
+constexpr float MAX_LINEAR_VELOCITY_MPS = 0.30f;
+constexpr float MAX_STEP_RATE = 16000.0f;
 constexpr float MIN_STEP_RATE = 1.0f;
 
-// Simple trapezoidal/ramp acceleration
-constexpr float LINEAR_ACCEL_MPS2 = 0.08f;
+// Jerk-limited S-curve velocity ramp.
+// This is smoother than an ideal trapezoid because acceleration itself
+// is ramped instead of changing instantly.
+constexpr float LINEAR_ACCEL_MPS2 = 0.20f;
+constexpr float LINEAR_DECEL_MPS2 = 0.15f;
+constexpr float MAX_LINEAR_JERK_MPS3 = 0.80f;
 
 // MPU6050
 constexpr uint8_t MPU6050_ADDRESS = 0x68;
@@ -91,6 +97,17 @@ int64_t correctionStartRightPulseCount = 0;
 
 float correctionDistanceTargetM = 0.0f;
 float correctionDistanceTravelledM = 0.0f;
+
+// Segment motion profile state. Python assigns a segment ID and tells the
+// ESP32 the segment length and required speed at the end of that segment.
+// Repeated camera corrections with the same segment ID do not restart it.
+int64_t segmentStartLeftPulseCount = 0;
+int64_t segmentStartRightPulseCount = 0;
+int32_t activeSegmentId = -1;
+float segmentDistanceTargetM = 0.0f;
+float segmentDistanceTravelledM = 0.0f;
+float segmentEndVelocityMps = 0.0f;
+bool segmentProfileActive = false;
 // ============================================================================
 // GLOBAL STATE
 // ============================================================================
@@ -142,6 +159,7 @@ float commandXLateralErrorM = 0.0f;
 float commandYLateralErrorM = 0.0f;
 
 float rampedVelocityMps = 0.0f;
+float currentLinearAccelerationMps2 = 0.0f;
 
 float baseDesiredHeadingDeg = 0.0f;
 float initialLateralHeadingBiasDeg = 0.0f;
@@ -180,6 +198,27 @@ float getCorrectionTravelledDistanceM() {
 
     const int64_t rightDelta =
         llabs(rightNow - correctionStartRightPulseCount);
+
+    const float averagePulses =
+        0.5f * static_cast<float>(leftDelta + rightDelta);
+
+    return averagePulses / STEPS_PER_METER;
+}
+
+
+float getSegmentTravelledDistanceM() {
+    noInterrupts();
+
+    const int64_t leftNow = leftStepPulseCount;
+    const int64_t rightNow = rightStepPulseCount;
+
+    interrupts();
+
+    const int64_t leftDelta =
+        llabs(leftNow - segmentStartLeftPulseCount);
+
+    const int64_t rightDelta =
+        llabs(rightNow - segmentStartRightPulseCount);
 
     const float averagePulses =
         0.5f * static_cast<float>(leftDelta + rightDelta);
@@ -262,6 +301,46 @@ float rampToward(float current, float target, float maxChange) {
     }
 
     return current;
+}
+
+float updateJerkLimitedVelocity(
+    float currentVelocity,
+    float targetVelocity,
+    float dt
+) {
+    const float velocityError = targetVelocity - currentVelocity;
+
+    float targetAcceleration = 0.0f;
+
+    if (fabsf(velocityError) > 0.0001f) {
+        targetAcceleration =
+            (velocityError > 0.0f)
+            ? LINEAR_ACCEL_MPS2
+            : -LINEAR_DECEL_MPS2;
+    }
+
+    const float maxAccelerationChange =
+        MAX_LINEAR_JERK_MPS3 * dt;
+
+    currentLinearAccelerationMps2 = rampToward(
+        currentLinearAccelerationMps2,
+        targetAcceleration,
+        maxAccelerationChange
+    );
+
+    float nextVelocity =
+        currentVelocity + currentLinearAccelerationMps2 * dt;
+
+    // Do not overshoot the requested target.
+    if (
+        (velocityError > 0.0f && nextVelocity > targetVelocity) ||
+        (velocityError < 0.0f && nextVelocity < targetVelocity)
+    ) {
+        nextVelocity = targetVelocity;
+        currentLinearAccelerationMps2 = 0.0f;
+    }
+
+    return nextVelocity;
 }
 
 
@@ -569,6 +648,7 @@ void stopMotion() {
     commandYLateralErrorM = 0.0f;
 
     rampedVelocityMps = 0.0f;
+    currentLinearAccelerationMps2 = 0.0f;
     motionMode = MODE_STOP;
 
     baseDesiredHeadingDeg = 0.0f;
@@ -587,6 +667,14 @@ void stopMotion() {
     correctionStartRightPulseCount = 0;
     correctionDistanceTargetM = 0.0f;
     correctionDistanceTravelledM = 0.0f;
+
+    segmentStartLeftPulseCount = 0;
+    segmentStartRightPulseCount = 0;
+    activeSegmentId = -1;
+    segmentDistanceTargetM = 0.0f;
+    segmentDistanceTravelledM = 0.0f;
+    segmentEndVelocityMps = 0.0f;
+    segmentProfileActive = false;
 
     stopMotors();
 }
@@ -618,7 +706,10 @@ void setVelocityCommand(
     float velocityMps,
     float mapHeadingDeg,
     float tagHeadingDeg,
-    float lateralErrorM
+    float lateralErrorM,
+    int32_t segmentId,
+    float segmentDistanceM,
+    float endVelocityMps
 ) {
     motionMode = MODE_NORMAL;
 
@@ -639,6 +730,38 @@ void setVelocityCommand(
     alignHeadingToTag(tagHeadingDeg);
 
     baseDesiredHeadingDeg = commandDesiredHeadingDeg;
+
+    const bool newSegment =
+        (!segmentProfileActive) ||
+        (segmentId != activeSegmentId);
+
+    if (newSegment) {
+        activeSegmentId = segmentId;
+        segmentDistanceTargetM = fmaxf(segmentDistanceM, 0.05f);
+        segmentEndVelocityMps = clampFloat(
+            fabsf(endVelocityMps),
+            0.0f,
+            fabsf(commandVelocityMps)
+        );
+
+        noInterrupts();
+
+        segmentStartLeftPulseCount = leftStepPulseCount;
+        segmentStartRightPulseCount = rightStepPulseCount;
+
+        interrupts();
+
+        segmentDistanceTravelledM = 0.0f;
+        segmentProfileActive = true;
+    } else {
+        // Allow planner updates without restarting travelled distance.
+        segmentDistanceTargetM = fmaxf(segmentDistanceM, 0.05f);
+        segmentEndVelocityMps = clampFloat(
+            fabsf(endVelocityMps),
+            0.0f,
+            fabsf(commandVelocityMps)
+        );
+    }
 
     float correctionDistanceM =
         TAG_SPACING_M * LATERAL_CORRECTION_DISTANCE_RATIO;
@@ -834,6 +957,7 @@ void updateMotion() {
         activeTargetHeadingDeg = 0.0f;
 
         rampedVelocityMps = 0.0f;
+        currentLinearAccelerationMps2 = 0.0f;
 
         stopMotors();
 
@@ -879,16 +1003,42 @@ void updateMotion() {
 
     float targetLinearVelocity = commandVelocityMps;
 
-    if (motionMode == MODE_APPROACH) {
-        targetLinearVelocity = computeApproachVelocity(commandVelocityMps);
+    if (motionMode == MODE_NORMAL && segmentProfileActive) {
+        segmentDistanceTravelledM =
+            getSegmentTravelledDistanceM();
+
+        const float remainingDistanceM = fmaxf(
+            0.0f,
+            segmentDistanceTargetM - segmentDistanceTravelledM
+        );
+
+        // Maximum speed that can still decelerate to segmentEndVelocityMps
+        // within the remaining distance.
+        const float brakingLimitedVelocityMps = sqrtf(
+            segmentEndVelocityMps * segmentEndVelocityMps
+            + 2.0f * LINEAR_DECEL_MPS2 * remainingDistanceM
+        );
+
+        targetLinearVelocity = fminf(
+            fabsf(commandVelocityMps),
+            brakingLimitedVelocityMps
+        );
+
+        if (commandVelocityMps < 0.0f) {
+            targetLinearVelocity = -targetLinearVelocity;
+        }
     }
 
-    const float maxVelocityChange = LINEAR_ACCEL_MPS2 * controlDt;
+    if (motionMode == MODE_APPROACH) {
+        // Python already commands the required approach speed. The ESP32
+        // only applies the smooth jerk-limited ramp.
+        targetLinearVelocity = commandVelocityMps;
+    }
 
-    rampedVelocityMps = rampToward(
+    rampedVelocityMps = updateJerkLimitedVelocity(
         rampedVelocityMps,
         targetLinearVelocity,
-        maxVelocityChange
+        controlDt
     );
 
     setMotion(rampedVelocityMps, angularVelocityRadS);
@@ -946,6 +1096,21 @@ void printStatus() {
 
     Serial.print(" RV=");
     Serial.print(rampedVelocityMps, 4);
+
+    Serial.print(" ACC=");
+    Serial.print(currentLinearAccelerationMps2, 3);
+
+    Serial.print(" SEG=");
+    Serial.print(activeSegmentId);
+
+    Serial.print(" SDIST=");
+    Serial.print(segmentDistanceTravelledM, 4);
+
+    Serial.print(" STARGET=");
+    Serial.print(segmentDistanceTargetM, 4);
+
+    Serial.print(" ENDV=");
+    Serial.print(segmentEndVelocityMps, 4);
 
     Serial.print(" XLAT=");
     Serial.print(commandXLateralErrorM, 4);
@@ -1044,12 +1209,18 @@ void processCommand(char* line) {
         char* mapHeadingString = strtok(nullptr, " ");
         char* tagHeadingString = strtok(nullptr, " ");
         char* lateralString = strtok(nullptr, " ");
+        char* segmentIdString = strtok(nullptr, " ");
+        char* segmentDistanceString = strtok(nullptr, " ");
+        char* endVelocityString = strtok(nullptr, " ");
 
         if (
             velocityString == nullptr ||
             mapHeadingString == nullptr ||
             tagHeadingString == nullptr ||
-            lateralString == nullptr
+            lateralString == nullptr ||
+            segmentIdString == nullptr ||
+            segmentDistanceString == nullptr ||
+            endVelocityString == nullptr
         ) {
             Serial.println("ERR VEL");
             return;
@@ -1059,12 +1230,18 @@ void processCommand(char* line) {
         const float mapHeadingDeg = atof(mapHeadingString);
         const float tagHeadingDeg = atof(tagHeadingString);
         const float lateralErrorM = atof(lateralString);
+        const int32_t segmentId = atol(segmentIdString);
+        const float segmentDistanceM = atof(segmentDistanceString);
+        const float endVelocityMps = atof(endVelocityString);
 
         setVelocityCommand(
             velocityMps,
             mapHeadingDeg,
             tagHeadingDeg,
-            lateralErrorM
+            lateralErrorM,
+            segmentId,
+            segmentDistanceM,
+            endVelocityMps
         );
 
         lastCommandTimeMs = millis();
