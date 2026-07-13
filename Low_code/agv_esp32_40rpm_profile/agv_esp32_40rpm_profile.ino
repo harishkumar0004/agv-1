@@ -67,7 +67,7 @@ constexpr float HEADING_MIN_DEG = -180.0f;
 constexpr float HEADING_KP = 0.40f;
 
 constexpr float TAG_SPACING_M = 0.50f;
-constexpr float LATERAL_CORRECTION_DISTANCE_RATIO = 1.00f;
+constexpr float LATERAL_CORRECTION_DISTANCE_RATIO = 0.80f;
 constexpr float LATERAL_GAIN = 1.0f;
 
 constexpr float MAX_LATERAL_HEADING_BIAS_DEG = 2.5f;
