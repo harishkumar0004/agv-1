@@ -193,8 +193,15 @@ class HMI:
         self.root.attributes("-fullscreen", not bool(self.root.attributes("-fullscreen")))
 
     def label(self, parent, text="", size=12, color=None, **kw):
-        return self.tk.Label(parent, text=text, font=("DejaVu Sans", size), fg=color or self.TEXT,
-                             bg=self.PANEL, **kw)
+        background = kw.pop("bg", self.PANEL)
+        return self.tk.Label(
+            parent,
+            text=text,
+            font=("DejaVu Sans", size),
+            fg=color or self.TEXT,
+            bg=background,
+            **kw
+        )
 
     def panel(self, parent, title: str):
         box = self.tk.Frame(parent, bg=self.PANEL, highlightbackground=self.BORDER, highlightthickness=1)
