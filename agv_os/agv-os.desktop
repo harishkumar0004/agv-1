@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=AGV-OS
+Comment=Industrial AGV Operating System
+Exec=lxterminal -e "python3 /home/pi/agv/agv_os.py"
+Icon=/home/pi/agv/agv_icon.png
+Terminal=false
+Type=Application
+Categories=Development;Robotics;

@@ -3,9 +3,7 @@
 #include <string.h>
 #include <math.h>
 
-// ============================================================================
-// CONFIGURATION
-// ============================================================================
+// configuration
 
 constexpr uint8_t LEFT_STEP_PIN = 16;
 constexpr uint8_t LEFT_DIR_PIN  = 26;
@@ -32,9 +30,11 @@ constexpr float WHEEL_CIRCUMFERENCE_M = PI_F * WHEEL_DIAMETER_M;
 constexpr float STEPS_PER_METER = STEPS_PER_WHEEL_REV / WHEEL_CIRCUMFERENCE_M;
 
 constexpr float TRACK_WIDTH_M = 0.355f;
+
 // Motion limits
 // 40 wheel RPM with a 0.117 m wheel is about 0.245 m/s.
 // Keep some headroom for steering, where one wheel runs faster.
+
 constexpr float MAX_LINEAR_VELOCITY_MPS = 0.30f;
 constexpr float MAX_STEP_RATE = 16000.0f;
 constexpr float MIN_STEP_RATE = 1.0f;
@@ -42,6 +42,7 @@ constexpr float MIN_STEP_RATE = 1.0f;
 // Jerk-limited S-curve velocity ramp.
 // This is smoother than an ideal trapezoid because acceleration itself
 // is ramped instead of changing instantly.
+
 constexpr float LINEAR_ACCEL_MPS2 = 0.20f;
 constexpr float LINEAR_DECEL_MPS2 = 0.15f;
 constexpr float MAX_LINEAR_JERK_MPS3 = 0.80f;
@@ -101,6 +102,7 @@ float correctionDistanceTravelledM = 0.0f;
 // Segment motion profile state. Python assigns a segment ID and tells the
 // ESP32 the segment length and required speed at the end of that segment.
 // Repeated camera corrections with the same segment ID do not restart it.
+
 int64_t segmentStartLeftPulseCount = 0;
 int64_t segmentStartRightPulseCount = 0;
 int32_t activeSegmentId = -1;
@@ -108,10 +110,7 @@ float segmentDistanceTargetM = 0.0f;
 float segmentDistanceTravelledM = 0.0f;
 float segmentEndVelocityMps = 0.0f;
 bool segmentProfileActive = false;
-// ============================================================================
-// GLOBAL STATE
-// ============================================================================
-
+// Global state
 // Stepper
 hw_timer_t* leftTimer = nullptr;
 hw_timer_t* rightTimer = nullptr;
@@ -226,9 +225,7 @@ float getSegmentTravelledDistanceM() {
     return averagePulses / STEPS_PER_METER;
 }
 
-// ============================================================================
-// UTILITY
-// ============================================================================
+// Utility
 
 float normalizeAngle(float angleDeg) {
     while (angleDeg > HEADING_MAX_DEG) {
@@ -344,9 +341,7 @@ float updateJerkLimitedVelocity(
 }
 
 
-// ============================================================================
-// STEPPER FUNCTIONS
-// ============================================================================
+// Stepper Functions
 
 void IRAM_ATTR onLeftTimer() {
     leftStepState = !leftStepState;
@@ -508,9 +503,7 @@ void setupSteppers() {
 }
 
 
-// ============================================================================
-// IMU FUNCTIONS
-// ============================================================================
+// Imu Functions
 
 bool writeImuRegister(uint8_t reg, uint8_t value) {
     Wire.beginTransmission(MPU6050_ADDRESS);
@@ -636,9 +629,7 @@ void resetHeading() {
 }
 
 
-// ============================================================================
-// MOTION CONTROL
-// ============================================================================
+// Motion Control
 
 void stopMotion() {
     commandVelocityMps = 0.0f;
@@ -863,9 +854,7 @@ void setApproachCommand(
 }
 
 
-// ============================================================================
-// TURNING
-// ============================================================================
+// Turning
 
 void startTurn(float targetHeadingDeg) {
     stopMotion();
@@ -1045,9 +1034,7 @@ void updateMotion() {
 }
 
 
-// ============================================================================
-// SERIAL PROTOCOL
-// ============================================================================
+// Serial Protocol
 
 void printStatus() {
     Serial.print("STATUS ");
@@ -1366,7 +1353,6 @@ void sendStatusIfDue() {
 
     printStatus();
 }
-
 
 // setup and main loop
 

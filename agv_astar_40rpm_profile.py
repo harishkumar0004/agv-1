@@ -9,7 +9,7 @@ from picamera2 import Picamera2
 from pupil_apriltags import Detector
 
 
-#Config Files
+# Config Files
 # AprilTag heading is sent to ESP32 as the ground-truth current heading.
 # The permanent target remains the map heading (0, 90, 180, or -90).
 TAG_HEADING_OFFSET_GAIN = 1.0
@@ -473,9 +473,7 @@ def detect_tags(detector, frame):
     return detections
 
 
-# ============================================================================
-# PRIORITY-BASED POSE ESTIMATION
-# ============================================================================
+# Priority based pose estimation
 
 def estimate_pose_from_tags(detections):
     candidates = []
